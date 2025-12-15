@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>聖經恢復本經節整合工具 v3.0</title>
+    <style>
+        body { font-family: "Microsoft JhengHei", Arial, sans-serif; margin: 0; padding: 0; height: 100vh; display: flex; flex-direction: column; background-color: #f9f9f9; }
+        header { background: #333; color: white; padding: 15px 20px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; }
+        h3 { margin: 0; }
+        .main-container { display: flex; flex: 1; overflow: hidden; }
+        
+        /* 左側控制區 */
+        .sidebar { width: 320px; background: #fff; padding: 15px; overflow-y: auto; border-right: 1px solid #ccc; display: flex; flex-direction: column; box-shadow: 2px 0 5px rgba(0,0,0,0.05); }
+        .input-area { margin-bottom: 15px; flex-shrink: 0; }
+        label { font-weight: bold; display: block; margin-bottom: 5px; color: #555; }
+        textarea { width: 100%; height: 100px; padding: 10px; border: 1px solid #ccc; border-radius: 6px; resize: vertical; font-size: 15px; font-family: inherit; box-sizing: border-box; }
+        textarea:focus { border-color: #007bff; outline: none; }
+        
+        button { width: 100%; padding: 12px; background-color: #007bff; color: white; border: none; border-radius: 6px; cursor: pointer; margin-top: 10px; font-size: 16px; transition: background 0.2s; }
+        button:hover { background-color: #0056b3; }
+        
+        /* 列表區 */
+        .link-list { flex: 1; overflow-y: auto; border-top: 1px solid #eee; margin-top: 10px; }
+        .link-item { padding: 12px 10px; border-bottom: 1px solid #f0f0f0; cursor: pointer; transition: background 0.2s; display: flex; align-items: center; }
+        .link-item:hover { background-color: #f0f8ff; }
+        .link-item.active { background-color: #e7f1ff; border-left: 4px solid #007bff; padding-left: 6px; }
+        .link-item .ref { font-weight: bold; color: #333; font-size: 16px; }
+        
+        /* 右側預覽區 */
+        .preview-area { flex: 1; background: #fff; position: relative; }
+        iframe { width: 100%; height: 100%; border: none; display: block; }
+        .placeholder { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #aaa; font-size: 1.2em; text-align: center; }
+        .error-msg { color: red; font-size: 12px; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+<header>
+    <h3>恢復本經節閱讀助手</h3>
+    <small style="color: #aaa;">v3.0</small>
+</header>
+
+<div class="main-container">
+    <div class="sidebar">
+        <div class="input-area">
+            <label for="inputStr">輸入經節 (逗號分隔):</label>
+            <!-- 預設填入您測試有問題的字串 -->
+            <textarea id="inputStr" placeholder="例：太五20，詩八九14...">太五20，詩八九14，腓三9，林後三8 ～ 9，五21，提後四8</textarea>
+            <button onclick="processInput()">產生列表</button>
+            <div id="errorMsg" class="error-msg"></div>
+        </div>
+        <div id="listContainer" class="link-list">
+            <div style="padding:10px; color:#888; text-align:center;">請點擊「產生列表」</div>
+        </div>
+    </div>
+    
+    <div class="preview-area">
+        <div id="placeholder" class="placeholder">
+            請在左側輸入經節<br>點擊列表後在此顯示
+        </div>
+        <iframe id="webFrame" name="webFrame" src=""></iframe>
+    </div>
+</div>
+
+<script>
+    // 聖經卷名與編號對照
+    const books = [
+        "創", "出", "利", "民", "申", "書", "士", "得", "撒上", "撒下", 
+        "王上", "王下", "代上", "代下", "拉", "尼", "斯", "伯", "詩", "箴", 
+        "傳", "歌", "賽", "耶", "哀", "結", "但", "何", "珥", "摩", 
+        "俄", "拿", "彌", "鴻", "哈", "番", "該", "亞", "瑪", 
+        "太", "可", "路", "約", "徒", "羅", "林前", "林後", "加", "弗", 
+        "腓", "西", "帖前", "帖後", "提前", "提後", "多", "門", "來", "雅", 
+        "彼前", "彼後", "約壹", "約貳", "約參", "猶", "啟"
+    ];
+
+    // 全形轉半形
+    function normalizeString(str) {
+        return str.replace(/[\uff01-\uff5e]/g, function(ch) {
+            return String.fromCharCode(ch.charCodeAt(0) - 0xfee0);
+        }).replace(/\u3000/g, ' ');
+    }
+
+    // 增強版：中文數字轉整數
+    function cnToInt(str) {
+        if (!str) return 0;
+        // 如果已經是數字，直接回傳
+        if (/^\d+$/.test(str)) return parseInt(str);
+
+        const map = {'一':1, '二':2, '三':3, '四':4, '五':5, '六':6, '七':7, '八':8, '九':9, '十':10, '零':0, '○':0};
+        
+        // 移除可能的雜訊
+        let s = str.replace(/[^\u4e00-\u9fa5]/g, ''); 
+        if (s.length === 0) return 0;
+
+        // 模式 1: 數位直讀 (例如: "八九" -> 89, "一二一" -> 121)
+        // 條件: 不包含 "十" 且長度 > 1
+        if (s.indexOf('十') === -1 && s.length > 1) {
+            let numStr = "";
+            for (let char of s) {
+                numStr += (map[char] !== undefined ? map[char] : "");
+            }
+            return parseInt(numStr) || 0;
+        }
+
+        // 模式 2: 傳統讀法 (例如: "八十九", "二十", "五")
+        if (s.length === 1) return map[s] || 0;
+        
+        if (s.startsWith('十')) s = '一' + s; // 處理 "十五" -> "一十五"
+        
+        let parts = s.split('十');
+        if (parts.length === 1) {
+            // 沒有十，照理說上面模式1已經處理了，防止意外
+            return map[parts[0]] || 0;
+        } else if (parts.length === 2) {
+            let ten = map[parts[0]] || 0;
+            if (parts[0] === "") ten = 1; // 十五 -> parts[0]是空
+            let unit = map[parts[1]] || 0;
+            return ten * 10 + unit;
+        }
+        
+        return 0;
+    }
+
+    // 全域變數記住上一卷書 (Context)
+    let lastBookNo = 0;
+    let lastBookName = "";
+
+    function processInput() {
+        let rawInput = document.getElementById('inputStr').value;
+        const listContainer = document.getElementById('listContainer');
+        const errorMsg = document.getElementById('errorMsg');
+        
+        listContainer.innerHTML = "";
+        errorMsg.textContent = "";
+
+        // 預處理：全形轉半形
+        let input = normalizeString(rawInput);
+        
+        // 分割
+        const items = input.split(/[,，、\n]+/).map(i => i.trim()).filter(i => i);
+
+        // 重置狀態
+        lastBookNo = 0;
+        lastBookName = "";
+        
+        // 排序書卷名 (長的優先匹配)
+        const sortedBooks = [...books].sort((a, b) => b.length - a.length);
+
+        if (items.length === 0) {
+            listContainer.innerHTML = "<div style='padding:10px; color:#888; text-align:center;'>沒有偵測到輸入</div>";
+            return;
+        }
+
+        items.forEach(item => {
+            try {
+                createListItem(item, sortedBooks, listContainer);
+            } catch (e) {
+                console.error(e);
+            }
+        });
+    }
+
+    function createListItem(rawText, sortedBooks, container) {
+        let text = rawText;
+        let currentBookNo = 0;
+        let currentBookName = "";
+
+        // 1. 辨識書卷
+        for (let b of sortedBooks) {
+            if (text.startsWith(b)) {
+                currentBookName = b;
+                currentBookNo = books.indexOf(b) + 1;
+                text = text.substring(b.length).trim();
+                
+                // 更新 Context
+                lastBookNo = currentBookNo;
+                lastBookName = currentBookName;
+                break;
+            }
+        }
+
+        // 使用 Context
+        if (currentBookNo === 0 && lastBookNo !== 0) {
+            currentBookNo = lastBookNo;
+            currentBookName = lastBookName;
+        }
+
+        if (currentBookNo === 0) {
+            // 無法辨識
+            let div = document.createElement('div');
+            div.className = 'link-item';
+            div.style.color = 'red';
+            div.innerText = `無法辨識: ${rawText}`;
+            container.appendChild(div);
+            return;
+        }
+
+        // 2. 處理後綴 (上/下)
+        let suffix = "";
+        let suffixMatch = text.match(/([上下ab])$/i);
+        if (suffixMatch) {
+            suffix = suffixMatch[1];
+            text = text.substring(0, text.length - 1).trim();
+        }
+
+        // 3. 處理區間 (～)
+        let isRange = false;
+        let rangeEnd = "";
+        let rangeParts = text.split(/[~～-]/);
+        let mainPart = rangeParts[0].trim();
+        
+        if (rangeParts.length > 1) {
+            isRange = true;
+            rangeEnd = rangeParts[1].trim();
+        }
+
+        // 4. 解析章節
+        let chapter = 1;
+        let verse = 1;
+
+        // 判斷格式: "五20" (中文+數字) vs "5:20" (分隔)
+        let mixedMatch = mainPart.match(/^([一二三四五六七八九十]+)(\d+)$/);
+        
+        if (mixedMatch) {
+            // 類似 "太五20" -> 章=五, 節=20
+            chapter = cnToInt(mixedMatch[1]);
+            verse = parseInt(mixedMatch[2]);
+        } else {
+            // 類似 "太 5 20" 或 "太5:20" 或 "腓三"
+            let parts = mainPart.replace(/[:：\s第章節]+/g, " ").trim().split(" ");
+            
+            if (parts.length >= 2) {
+                chapter = cnToInt(parts[0]);
+                verse = cnToInt(parts[1]);
+            } else if (parts.length === 1 && parts[0] !== "") {
+                // 只有一個數字 (可能是章，也可能是節)
+                // 這裡假設是章 (如 "腓三" -> 3章1節)
+                // 但如果是 "五21" 這種接續的，因為前面 logic 已被 mixedMatch 抓走
+                // 所以這裡剩下的大多是單純的章，或是單純的節(若前有章)
+                // 為了簡化網頁版操作，單一數字通常視為章
+                chapter = cnToInt(parts[0]);
+                verse = 1;
+            }
+        }
+
+        if (chapter === 0) chapter = 1;
+
+        // 5. 產生 DOM
+        let url = `https://recoveryversion.twgbr.org/Style0A/026/read_List.php?f_BookNo=${currentBookNo}&f_ChapterNo=${chapter}&f_VerseNo=${verse}#${verse}`;
+        
+        let displayText = `${currentBookName} ${chapter}:${verse}`;
+        if (isRange) displayText += `-${rangeEnd}`;
+        if (suffix) displayText += ` ${suffix}`;
+
+        let div = document.createElement('div');
+        div.className = 'link-item';
+        div.innerHTML = `<span class="ref">${displayText}</span>`;
+        div.onclick = function() {
+            // 切換 Active 樣式
+            document.querySelectorAll('.link-item').forEach(el => el.classList.remove('active'));
+            div.classList.add('active');
+            
+            // 載入 Iframe
+            let frame = document.getElementById('webFrame');
+            frame.src = url;
+            
+            document.getElementById('placeholder').style.display = 'none';
+        };
+
+        container.appendChild(div);
+    }
+</script>
+
+</body>
+</html>
