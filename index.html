@@ -77,6 +77,9 @@
 
     // 全形轉半形
     function normalizeString(str) {
+        // 先處理異體字
+        let s = str.replace(/啓/g, '啟');
+        
         return str.replace(/[\uff01-\uff5e]/g, function(ch) {
             return String.fromCharCode(ch.charCodeAt(0) - 0xfee0);
         }).replace(/\u3000/g, ' ');
@@ -274,4 +277,5 @@
 </script>
 
 </body>
+
 </html>
