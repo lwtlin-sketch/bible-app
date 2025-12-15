@@ -19,6 +19,10 @@ BOOK_MAP = {name: i+1 for i, name in enumerate(BIBLE_BOOKS)}
 # --- 核心邏輯函式 (與 v10.0 相同，只修飾部分) ---
 
 def normalize_string(s):
+    """全形轉半形，並處理異體字"""
+    # 新增這行：將 '啓' 轉為 '啟'
+    s = s.replace('啓', '啟')
+    
     r = ""
     for char in s:
         code = ord(char)
@@ -221,3 +225,4 @@ if st.button("開始抓取"):
             file_name="bible_verses.txt",
             mime="text/plain"
         )
+
