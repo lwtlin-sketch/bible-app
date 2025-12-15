@@ -1,3 +1,4 @@
+import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import re
@@ -15,8 +16,9 @@ BIBLE_BOOKS = [
 ]
 BOOK_MAP = {name: i+1 for i, name in enumerate(BIBLE_BOOKS)}
 
+# --- 核心邏輯函式 (與 v10.0 相同，只修飾部分) ---
+
 def normalize_string(s):
-    """全形轉半形"""
     r = ""
     for char in s:
         code = ord(char)
@@ -26,7 +28,6 @@ def normalize_string(s):
     return r.strip()
 
 def cn_to_int(s):
-    """中文轉數字"""
     if not s: return 0
     if s.isdigit(): return int(s)
     cn_nums = {'一':1, '二':2, '三':3, '四':4, '五':5, '六':6, '七':7, '八':8, '九':9, '十':10, '零':0}
@@ -47,19 +48,11 @@ def cn_to_int(s):
     return 0
 
 def fetch_verse_dict(book_no, chapter):
-    """
-    抓取整章經文，並回傳字典 {節數: 內容}
-    不再回傳字串，以便後續靈活排版
-    """
-    # 這裡 f_VerseNo 設為 1，抓取整頁解析
     url = f"https://recoveryversion.twgbr.org/Style0A/026/read_List.php?f_BookNo={book_no}&f_ChapterNo={chapter}&f_VerseNo=1"
-    
     verse_dict = {}
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=20)
-        
-        # 強制使用 cp950 解碼 (解決 Big5 亂碼)
         try:
             html_text = response.content.decode('cp950')
         except:
@@ -69,45 +62,30 @@ def fetch_verse_dict(book_no, chapter):
                 html_text = response.content.decode('utf-8', errors='ignore')
 
         soup = BeautifulSoup(html_text, 'html.parser')
-        
-        # 移除干擾元素
         for script in soup(["script", "style"]):
             script.extract()
             
         rows = soup.find_all('tr')
-        
         for row in rows:
             tds = row.find_all('td')
             if len(tds) < 2: continue
-            
-            # 處理經節號 (格式如 89:14)
             ref_text = tds[0].get_text(strip=True)
             if ':' in ref_text or '：' in ref_text:
                 parts = re.split(r'[:：]', ref_text)
                 if len(parts) > 1:
                     v_num_str = parts[-1].strip()
-                    
                     if v_num_str.isdigit():
                         v_num = int(v_num_str)
                         content_td = tds[1]
-                        
-                        # 移除註解
-                        for sup in content_td.find_all('sup'):
-                            sup.decompose()
-                        for note_link in content_td.find_all('a', class_='notes'):
-                            note_link.decompose()
-                        
-                        # 取得純文字
+                        for tag in content_td.find_all(['sup', 'a']):
+                            if tag.name == 'sup' or (tag.name == 'a' and 'notes' in tag.get('class', [])):
+                                tag.decompose()
                         text_content = content_td.get_text(separator="", strip=True)
                         text_content = text_content.replace('\u3000', ' ').strip()
-                        
                         if text_content:
                             verse_dict[v_num] = text_content
-                            
     except Exception as e:
-        print(f"抓取錯誤: {str(e)}")
         return None
-
     return verse_dict
 
 def parse_input_string(input_str):
@@ -122,11 +100,9 @@ def parse_input_string(input_str):
     for item in raw_items:
         item = item.strip()
         if not item: continue
-        
         curr_book_no = None
         curr_book_name = ""
         remain = item
-        
         for b in sorted_books:
             if remain.startswith(b):
                 curr_book_name = b
@@ -135,7 +111,6 @@ def parse_input_string(input_str):
                 last_book_no = curr_book_no
                 last_book_name = curr_book_name
                 break
-        
         if curr_book_no is None:
             if last_book_no:
                 curr_book_no = last_book_no
@@ -170,7 +145,6 @@ def parse_input_string(input_str):
             val = cn_to_int(match_split[0])
             chapter = val
             v_start = 1
-            
         v_end = v_start
         if end_part:
             if end_part.isdigit():
@@ -187,52 +161,63 @@ def parse_input_string(input_str):
             'v_end': v_end,
             'suffix': suffix
         })
-        
     return parsed_items
 
-if __name__ == "__main__":
-    default_input = "太五20，詩八九14，腓三9，林後三8 ～ 9，五21，提後四8 上"
-    print(f"預設範例：{default_input}")
-    user_input = input("請輸入經節 (按 Enter 直接使用範例): ")
-    
-    if not user_input.strip():
-        user_input = default_input
-        
-    print("\n正在抓取...\n")
-    tasks = parse_input_string(user_input)
-    
-    final_output_blocks = [] # 儲存每個查詢區塊的文字
-    
-    for t in tasks:
-        print(f"處理: {t['name']} {t['ch']}:{t['v_start']}...")
-        
-        verse_dict = fetch_verse_dict(t['no'], t['ch'])
-        
-        # 準備這個區塊的輸出內容
-        block_lines = []
-        
-        if verse_dict is None or not verse_dict:
-             block_lines.append(f"{t['name']} {t['ch']}:{t['v_start']} (無法抓取內容或無此節)")
-        else:
-            # 針對區間 loop (例如 8-9 節)
-            for v in range(t['v_start'], t['v_end'] + 1):
-                content = verse_dict.get(v, "(無內容)")
-                # 格式化輸出： 書名 章:節 經文
-                line = f"{t['name']} {t['ch']}:{v} {content}"
-                block_lines.append(line)
-        
-        # 將這個區塊的行合併
-        final_output_blocks.append("\n".join(block_lines))
-        
-        # 禮貌性延遲
-        time.sleep(0.5)
+# --- Streamlit 介面邏輯 ---
+st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
 
-    # 用兩個換行符號連接各個區塊，達到空一行的效果
-    final_text = "\n\n".join(final_output_blocks)
-    
-    print("\n" + "="*30 + "\n")
-    print(final_text)
-    
-    with open("bible_result.txt", "w", encoding="utf-8-sig") as f:
-        f.write(final_text)
-    print("\n已存檔至 bible_result.txt")
+st.title("📖 恢復本經節抓取工具")
+st.write("輸入簡寫經節（如：太五20），自動抓取並整理格式。")
+
+# 輸入區
+default_text = "太五20，詩八九14，腓三9，林後三8 ～ 9，五21，提後四8 上"
+user_input = st.text_area("請輸入經節 (可多行或逗號分隔)", value=default_text, height=100)
+
+if st.button("開始抓取"):
+    if not user_input.strip():
+        st.warning("請輸入內容！")
+    else:
+        st.info("正在連線抓取中，請稍候...")
+        
+        # 進度條
+        progress_bar = st.progress(0)
+        
+        tasks = parse_input_string(user_input)
+        final_output_blocks = []
+        
+        total_tasks = len(tasks)
+        
+        for i, t in enumerate(tasks):
+            # 更新進度
+            progress = (i + 1) / total_tasks
+            progress_bar.progress(progress)
+            
+            verse_dict = fetch_verse_dict(t['no'], t['ch'])
+            block_lines = []
+            
+            if verse_dict is None or not verse_dict:
+                 block_lines.append(f"{t['name']} {t['ch']}:{t['v_start']} (無法抓取內容或無此節)")
+            else:
+                for v in range(t['v_start'], t['v_end'] + 1):
+                    content = verse_dict.get(v, "(無內容)")
+                    line = f"{t['name']} {t['ch']}:{v} {content}"
+                    block_lines.append(line)
+            
+            final_output_blocks.append("\n".join(block_lines))
+            time.sleep(0.3) # 避免過快
+
+        # 顯示結果
+        final_text = "\n\n".join(final_output_blocks)
+        
+        st.success("抓取完成！")
+        
+        st.subheader("抓取結果")
+        st.text_area("結果預覽 (可直接複製)", value=final_text, height=300)
+        
+        # 下載按鈕
+        st.download_button(
+            label="下載為 .txt 檔案",
+            data=final_text,
+            file_name="bible_verses.txt",
+            mime="text/plain"
+        )
