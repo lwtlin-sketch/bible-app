@@ -49,6 +49,29 @@
             <textarea id="inputStr" placeholder="例：太五20，詩八九14...">太五20，詩八九14，腓三9，林後三8 ～ 9，五21，提後四8</textarea>
             <button onclick="processInput()">產生列表</button>
             <div id="errorMsg" class="error-msg"></div>
+            <!-- === 請複製以下這段代碼，插入在按鈕或 errorMsg 下方 === -->
+            <style>
+                /* 簡易的說明區樣式 */
+                details { margin-top: 15px; border: 1px solid #eee; border-radius: 5px; padding: 5px; background: #fafafa; font-size: 14px; color: #555; }
+                summary { cursor: pointer; font-weight: bold; padding: 5px; outline: none; }
+                details ul { margin: 5px 0 5px 20px; padding: 0; }
+                details li { margin-bottom: 3px; }
+            </style>
+            
+            <details>
+                <summary>ℹ️ 使用說明與範例</summary>
+                <div style="padding: 5px;">
+                    <ul>
+                        <li><b>格式：</b>支援 `太五20`、`太5:20` 或 `太 5 20`。</li>
+                        <li><b>連貫：</b>支援 `腓三9，五21` (後者自動沿用書卷)。</li>
+                        <li><b>區間：</b>支援 `林後三8~9`。</li>
+                        <li><b>操作：</b>輸入後點擊按鈕，列表會顯示於下方。</li>
+                        <li><b>閱讀：</b>點擊列表項目，右側視窗即會跳轉至該經節。</li>
+                    </ul>
+                    <small style="color:#888;">*支援「啓」自動轉「啟」</small>
+                </div>
+            </details>
+            <!-- =================================================== -->            
         </div>
         <div id="listContainer" class="link-list">
             <div style="padding:10px; color:#888; text-align:center;">請點擊「產生列表」</div>
@@ -280,4 +303,5 @@
 </body>
 
 </html>
+
 
