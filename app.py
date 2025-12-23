@@ -16,11 +16,11 @@ BIBLE_BOOKS = [
 ]
 BOOK_MAP = {name: i+1 for i, name in enumerate(BIBLE_BOOKS)}
 
-# --- 核心邏輯函式 (與 v10.0 相同，只修飾部分) ---
+# --- 核心邏輯函式 ---
 
 def normalize_string(s):
     """全形轉半形，並處理異體字"""
-    # 新增這行：將 '啓' 轉為 '啟'
+    # 將 '啓' 轉為 '啟'
     s = s.replace('啓', '啟')
     
     r = ""
@@ -171,7 +171,7 @@ def parse_input_string(input_str):
 st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
 
 st.title("📖 恢復本經節抓取工具")
-# === 請複製以下這段代碼，貼在 st.title 之後，st.text_area 之前 ===
+
 with st.expander("ℹ️ 使用說明與範例 (點擊展開)"):
     st.markdown("""
     ### 📝 輸入格式說明
@@ -182,14 +182,14 @@ with st.expander("ℹ️ 使用說明與範例 (點擊展開)"):
        - **一般**：`太五20` 或 `太5:20`
        - **多節**：`林後三8-9` 或 `林後3:8~9`
        - **分段**：`提後四8 上` (程式會自動忽略 '上/下/a/b')
-       - **省略書卷**：`腓三9，12` (第二組數字會自動沿用腓立比書)
+       - **省略書卷**：`腓三9，五21` (第二組會自動沿用書卷，若為新章)
     
     ### 🚀 功能特色
-    - 自動去除網頁中的註解數字（如 <sup>1</sup>）。
-    - 抓取結果可直接複製到 Word 或 PPT。
-    - 支援下載為 `.txt` 文字檔。
+    - **一鍵複製**：抓取後，右上角會出現複製按鈕。
+    - **自動過濾**：去除網頁中的註解數字（如 <sup>1</sup>）。
+    - **下載存檔**：可將結果下載為 `.txt` 檔案。
     """)
-# ===============================================================
+
 st.write("輸入簡寫經節（如：太五20），自動抓取並整理格式。")
 
 # 輸入區
@@ -202,7 +202,6 @@ if st.button("開始抓取"):
     else:
         st.info("正在連線抓取中，請稍候...")
         
-        # 進度條
         progress_bar = st.progress(0)
         
         tasks = parse_input_string(user_input)
@@ -211,7 +210,6 @@ if st.button("開始抓取"):
         total_tasks = len(tasks)
         
         for i, t in enumerate(tasks):
-            # 更新進度
             progress = (i + 1) / total_tasks
             progress_bar.progress(progress)
             
@@ -227,15 +225,19 @@ if st.button("開始抓取"):
                     block_lines.append(line)
             
             final_output_blocks.append("\n".join(block_lines))
-            time.sleep(0.3) # 避免過快
+            time.sleep(0.3)
 
-        # 顯示結果
         final_text = "\n\n".join(final_output_blocks)
         
         st.success("抓取完成！")
         
+        # === 顯示結果 (使用 st.code 以獲得複製按鈕) ===
         st.subheader("抓取結果")
-        st.text_area("結果預覽 (可直接複製)", value=final_text, height=300)
+        st.caption("請點擊下方區塊右上角的 📋 圖示即可複製全部內容")
+        
+        # 使用 code 區塊顯示文字，language="text" 表示純文字
+        # 這樣 Streamlit 會自動在右上角提供一個「複製」按鈕
+        st.code(final_text, language="text")
         
         # 下載按鈕
         st.download_button(
@@ -244,6 +246,3 @@ if st.button("開始抓取"):
             file_name="bible_verses.txt",
             mime="text/plain"
         )
-
-
-
