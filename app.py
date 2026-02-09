@@ -50,6 +50,7 @@ def cn_to_int(s):
     return 0
 
 def fetch_verse_dict(book_no, chapter):
+    """抓取單一章節的所有經文"""
     url = f"https://recoveryversion.twgbr.org/Style0A/026/read_List.php?f_BookNo={book_no}&f_ChapterNo={chapter}&f_VerseNo=1"
     verse_dict = {}
     try:
@@ -90,6 +91,27 @@ def fetch_verse_dict(book_no, chapter):
         return None
     return verse_dict
 
+def parse_chapter_verse(text):
+    """解析單一段落 (例如: '五20' 或 '5:20' 或 '20') 回傳 (chapter, verse, has_chapter)"""
+    # 格式 A: 中文+數字 (如: 五20, 七9)
+    match_mixed = re.match(r'^([一二三四五六七八九十]+)(\d+)$', text)
+    if match_mixed:
+        return cn_to_int(match_mixed.group(1)), int(match_mixed.group(2)), True
+    
+    # 格式 B: 分隔符 (如: 5:20)
+    match_split = re.split(r'[:\s]+', text)
+    if len(match_split) >= 2:
+        return cn_to_int(match_split[0]), cn_to_int(match_split[1]), True
+        
+    # 格式 C: 單一數字 (如: '20' 或 '五')
+    val_str = match_split[0]
+    val = cn_to_int(val_str)
+    
+    if val_str.isdigit():
+        return None, val, False # 純數字，可能是節，也可能是章，由 Context 決定
+    else:
+        return val, 1, True # 中文數字，通常視為章
+
 def parse_input_string(input_str):
     input_str = normalize_string(input_str)
     raw_items = re.split(r'[,，、\n]+', input_str)
@@ -97,7 +119,7 @@ def parse_input_string(input_str):
     
     last_book_no = None
     last_book_name = ""
-    last_chapter_val = None # 新增：記錄上一次的章數
+    last_chapter_val = None 
     
     sorted_books = sorted(BIBLE_BOOKS, key=len, reverse=True)
     
@@ -117,89 +139,79 @@ def parse_input_string(input_str):
                 remain = remain[len(b):].strip()
                 break
         
-        # 如果書卷改變了，或者明確指定了新書卷，章數記憶要重置
         if curr_book_no is not None:
             last_book_no = curr_book_no
             last_book_name = curr_book_name
-            last_chapter_val = None # 換書了，重置章數
+            last_chapter_val = None 
         elif last_book_no is not None:
-            # 沿用上一卷書
             curr_book_no = last_book_no
             curr_book_name = last_book_name
         else:
-            continue # 無法辨識書卷，跳過
+            continue
 
-        # 2. 處理後綴 (上/下)
+        # 2. 處理後綴
         suffix = ""
         match_suffix = re.search(r'([上下ab])$', remain, re.IGNORECASE)
         if match_suffix:
             suffix = match_suffix.group(1)
             remain = remain[:-1].strip()
 
-        # 3. 處理區間
+        # 3. 處理區間 (關鍵邏輯修正：區分「同章範圍」與「跨章範圍」)
         range_parts = re.split(r'[~～-]', remain)
         main_part = range_parts[0].strip()
         end_part = range_parts[1].strip() if len(range_parts) > 1 else None
         
-        # 4. 解析章節 (核心邏輯修正)
-        chapter = 1
-        v_start = 1
-        v_end = 1
+        # 解析起始點
+        p_ch, p_v, has_ch = parse_chapter_verse(main_part)
         
-        # 格式 A: 中文+數字 (如: 五20, 七9) -> 章+節
-        match_mixed = re.match(r'^([一二三四五六七八九十]+)(\d+)$', main_part)
+        chapter_start = 1
+        verse_start = 1
         
-        # 格式 B: 分隔符 (如: 5:20)
-        match_split = re.split(r'[:\s]+', main_part)
-        
-        if match_mixed:
-            # "七9" -> 第7章 第9節
-            chapter = cn_to_int(match_mixed.group(1))
-            v_start = int(match_mixed.group(2))
-            last_chapter_val = chapter # 更新章數記憶
-            
-        elif len(match_split) >= 2:
-            # "5:20"
-            chapter = cn_to_int(match_split[0])
-            v_start = cn_to_int(match_split[1])
-            last_chapter_val = chapter # 更新章數記憶
-            
-        elif len(match_split) == 1:
-            val_str = match_split[0]
-            val = cn_to_int(val_str)
-            
-            # === 關鍵判斷邏輯 ===
-            # 如果是純阿拉伯數字 (如 "5")
-            if val_str.isdigit():
-                if last_chapter_val is not None:
-                    # 如果前面已經有章數 (如: 啟一1, 5)，視為 "節"
-                    chapter = last_chapter_val
-                    v_start = val
-                else:
-                    # 如果前面沒章數 (如: 啟5)，視為 "章"
-                    chapter = val
-                    v_start = 1
-                    last_chapter_val = chapter
+        if has_ch:
+            chapter_start = p_ch
+            verse_start = p_v
+            last_chapter_val = chapter_start
+        else:
+            # 只有數字
+            if last_chapter_val is not None:
+                chapter_start = last_chapter_val
+                verse_start = p_v
             else:
-                # 如果是中文數字 (如 "五")，視為 "章"
-                chapter = val
-                v_start = 1
-                last_chapter_val = chapter
+                chapter_start = p_ch if p_ch else p_v # 若前面沒章，視為章
+                verse_start = 1
+                last_chapter_val = chapter_start
+
+        # 解析結束點
+        chapter_end = chapter_start
+        verse_end = verse_start
         
-        v_end = v_start
         if end_part:
-            if end_part.isdigit():
-                v_end = int(end_part)
+            # 嘗試解析結束部分是否包含章 (例如 "二六56")
+            e_ch, e_v, e_has_ch = parse_chapter_verse(end_part)
+            
+            if e_has_ch:
+                # 結束點有明確章節 (如 "二六56" 或 "26:56")
+                chapter_end = e_ch
+                verse_end = e_v
+                last_chapter_val = chapter_end # 更新記憶
             else:
-                v_end = cn_to_int(end_part)
-                if v_end == 0: v_end = v_start
+                # 結束點只有數字
+                if e_v > 0:
+                    # 判斷這個數字是否大到像「章」？
+                    # 恢復本網站的特性，如果數字很小 (如 5)，通常是同章的節
+                    # 但如果使用者輸入 `太25~26` (意指25章到26章)，這很難判斷
+                    # 基於您的需求 "二五14~二六56"，結束點通常會帶章
+                    # 若只有 "14~56"，則視為同章
+                    chapter_end = chapter_start
+                    verse_end = e_v
 
         parsed_items.append({
             'name': curr_book_name,
             'no': curr_book_no,
-            'ch': chapter,
-            'v_start': v_start,
-            'v_end': v_end,
+            'ch_start': chapter_start,
+            'v_start': verse_start,
+            'ch_end': chapter_end,
+            'v_end': verse_end,
             'suffix': suffix
         })
         
@@ -214,32 +226,30 @@ with st.expander("ℹ️ 使用說明與範例 (點擊展開)"):
     st.markdown("""
     ### 📝 輸入格式說明
     1. **書卷簡寫**：支援常見簡寫（如：太、林前、啟）。
-       - *自動修正*：支援異體字（如「啓」會自動轉為「啟」）。
     2. **分隔符號**：請使用 **逗號 (，)** 或 **換行** 來區隔不同處經節。
     3. **格式範例**：
        - **一般**：`太五20` 或 `太5:20`
-       - **同一章多節**：`啟一1-2，5，9` (5和9會自動視為第1章的經節)
-       - **跨章**：`太五20，六10` (自動跳轉至第6章)
-       - **分段**：`提後四8 上`
-       - **省略書卷**：`腓三9，五21` (第二組自動沿用腓立比書)
+       - **跨章範圍**：`太二五14~二六56` (自動抓取跨章經節)
+       - **多章範圍**：`可二1~四34` (自動補完中間的第三章)
+       - **同章多節**：`啟一1-2，5，9`
+       - **省略書卷**：`腓三9，五21` (第二組沿用書卷)
     
     ### 🚀 功能特色
-    - **一鍵複製**：抓取後，右上角會出現複製按鈕。
-    - **自動過濾**：去除網頁中的註解數字。
-    - **下載存檔**：可將結果下載為 `.txt` 檔案。
+    - **跨章抓取**：支援如 `太25:14 ~ 26:56` 的跨章節抓取。
+    - **一鍵複製**：結果顯示於代碼區塊，右上角可直接複製。
     """)
 
-st.write("輸入簡寫經節（如：太五20），自動抓取並整理格式。")
+st.write("輸入簡寫經節，自動抓取並整理格式。")
 
-# 輸入區 - 修改預設值為您的新需求
-default_text = "啟一1～2，5，9～12，七9～17，十九10"
-user_input = st.text_area("請輸入經節 (可多行或逗號分隔)", value=default_text, height=100)
+# 輸入區 - 預設為您的測試案例
+default_text = "太二五14~二六56，二六57~二八20，可一1~一45，二1~四34，四35~七30，七31~十12，十13~十二37"
+user_input = st.text_area("請輸入經節 (可多行或逗號分隔)", value=default_text, height=150)
 
 if st.button("開始抓取"):
     if not user_input.strip():
         st.warning("請輸入內容！")
     else:
-        st.info("正在連線抓取中，請稍候...")
+        st.info("正在連線抓取中，因範圍較大請耐心等候...")
         
         progress_bar = st.progress(0)
         
@@ -252,19 +262,36 @@ if st.button("開始抓取"):
             progress = (i + 1) / total_tasks
             progress_bar.progress(progress)
             
-            verse_dict = fetch_verse_dict(t['no'], t['ch'])
-            block_lines = []
+            # === 處理跨章邏輯 ===
+            task_lines = []
             
-            if verse_dict is None or not verse_dict:
-                 block_lines.append(f"{t['name']} {t['ch']}:{t['v_start']} (無法抓取內容或無此節)")
+            # 從起始章 跑到 結束章
+            for current_ch in range(t['ch_start'], t['ch_end'] + 1):
+                verse_dict = fetch_verse_dict(t['no'], current_ch)
+                
+                if verse_dict:
+                    # 計算該章要抓的起始節與結束節
+                    # 如果是起始章，從 v_start 開始；否則從第 1 節開始
+                    start_v = t['v_start'] if current_ch == t['ch_start'] else 1
+                    
+                    # 如果是結束章，到 v_end 結束；否則抓到該章最大節數 (用 999 概括)
+                    end_v = t['v_end'] if current_ch == t['ch_end'] else 999
+                    
+                    # 遍歷字典輸出
+                    # 這裡需要將 key 排序，以免順序亂掉
+                    for v in sorted(verse_dict.keys()):
+                        if start_v <= v <= end_v:
+                            content = verse_dict[v]
+                            line = f"{t['name']} {current_ch}:{v} {content}"
+                            task_lines.append(line)
+                
+                # 禮貌性延遲，避免大量請求被擋
+                time.sleep(0.2)
+
+            if not task_lines:
+                 final_output_blocks.append(f"{t['name']} {t['ch_start']}:{t['v_start']} (無法抓取或無內容)")
             else:
-                for v in range(t['v_start'], t['v_end'] + 1):
-                    content = verse_dict.get(v, "(無內容)")
-                    line = f"{t['name']} {t['ch']}:{v} {content}"
-                    block_lines.append(line)
-            
-            final_output_blocks.append("\n".join(block_lines))
-            time.sleep(0.3)
+                final_output_blocks.append("\n".join(task_lines))
 
         final_text = "\n\n".join(final_output_blocks)
         
