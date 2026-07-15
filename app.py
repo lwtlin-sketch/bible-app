@@ -51,7 +51,6 @@ SEPARATOR_LINE = "-" * 50
 def setup_chinese_font():
     """自動下載並回傳思源黑體的本機路徑"""
     font_filename = "NotoSansTC-Regular.ttf"
-    # 若本機還沒有這個字型，就從 GitHub 下載乾淨的繁體中文字型
     if not os.path.exists(font_filename):
         font_url = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
         try:
@@ -63,7 +62,6 @@ def setup_chinese_font():
             st.error(f"下載字型失敗，圖片/PDF 中文可能無法正常顯示: {str(e)}")
             return None
     
-    # 註冊字型給 ReportLab (PDF用)
     if HAS_REPORTLAB and os.path.exists(font_filename):
         try:
             pdfmetrics.registerFont(TTFont('NotoSansTC', font_filename))
@@ -72,7 +70,6 @@ def setup_chinese_font():
             
     return font_filename
 
-# 在程式一開始就準備好字型
 FONT_PATH = setup_chinese_font()
 
 
@@ -222,7 +219,6 @@ def generate_pdf(text_content):
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=50, leftMargin=50, topMargin=50, bottomMargin=50)
     styles = getSampleStyleSheet()
     
-    # 這裡強制使用我們下載好的 NotoSansTC
     verse_style = ParagraphStyle('VerseStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=14, leading=22, wordWrap='CJK')
     title_style = ParagraphStyle('TitleStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=16, leading=24, spaceAfter=10, textColor="#1F4E79")
     
@@ -231,7 +227,8 @@ def generate_pdf(text_content):
         line = line.strip()
         if not line: story.append(Spacer(1, 10))
         elif line == SEPARATOR_LINE: story.append(Spacer(1, 15))
-        elif line in FULL_BIBLE_BOOKS: story.append(Paragraph(f"<b>{line}</b>", title_style))
+        # 修正：拿掉 <b> 標籤，因為思源黑體 Regular 不支援 Bold 的映射
+        elif line in FULL_BIBLE_BOOKS: story.append(Paragraph(line, title_style))
         else: story.append(Paragraph(line, verse_style))
             
     doc.build(story)
@@ -246,7 +243,6 @@ def generate_image(text_content):
     margin = 40
     max_width = 800
     
-    # 強制載入下載好的思源黑體
     try: font = ImageFont.truetype(FONT_PATH, font_size)
     except: return None 
 
@@ -260,9 +256,8 @@ def generate_image(text_content):
         current_line = ""
         for char in line:
             test_line = current_line + char
-            # Pillow 的 textlength 支援度較好
             try: text_len = font.getlength(test_line)
-            except: text_len = font.getsize(test_line)[0] # 舊版 Pillow 相容
+            except: text_len = font.getsize(test_line)[0] 
             
             if text_len > (max_width - 2 * margin):
                 wrapped_lines.append(current_line)
@@ -293,7 +288,6 @@ def generate_image(text_content):
 st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
 st.title("📖 恢復本經節抓取工具")
 
-# 初始化 Session State (用來保存輸入框內容與最後抓取的結果，避免點按鈕後消失)
 if "user_input" not in st.session_state:
     st.session_state.user_input = "可一1~5\n創一1~3"
 if "final_text" not in st.session_state:
@@ -301,7 +295,7 @@ if "final_text" not in st.session_state:
 
 def clear_text():
     st.session_state.user_input = ""
-    st.session_state.final_text = "" # 清空時也一併清空結果區塊
+    st.session_state.final_text = ""
 
 st.text_area("請輸入經節 (可多行或逗號分隔)", key="user_input", height=150)
 
@@ -309,7 +303,6 @@ col1, col2 = st.columns([1, 4])
 with col1: btn_start = st.button("🚀 開始抓取", type="primary")
 with col2: st.button("🗑️ 清除內容", on_click=clear_text)
 
-# 當按下開始抓取時，才執行API連線
 if btn_start:
     input_text = st.session_state.user_input
     if not input_text.strip():
@@ -357,10 +350,8 @@ if btn_start:
         if not final_lines:
             st.error("找不到任何經文，請檢查輸入格式。")
         else:
-            # 將結果存入 Session State 中！這樣點擊下載按鈕重新渲染時，結果才不會不見！
             st.session_state.final_text = "\n".join(final_lines)
 
-# --- 顯示結果與下載按鈕區 (只要 Session 裡有資料，就會一直顯示) ---
 if st.session_state.final_text:
     final_text = st.session_state.final_text
     st.success("🎉 抓取完成！")
