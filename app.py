@@ -4,8 +4,9 @@ from bs4 import BeautifulSoup
 import re
 import time
 import io
+import os
 
-# 嘗試載入 PDF 套件
+# 嘗試載入 PDF 與圖片套件 (用於相容性處理)
 try:
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
@@ -15,6 +16,12 @@ try:
     HAS_REPORTLAB = True
 except ImportError:
     HAS_REPORTLAB = False
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
 
 # --- 基礎設定 ---
 BIBLE_BOOKS = [
@@ -37,9 +44,22 @@ FULL_BIBLE_BOOKS = [
 ]
 BOOK_MAP = {name: i+1 for i, name in enumerate(BIBLE_BOOKS)}
 BOOK_FULL_MAP = {name: full for name, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
+SEPARATOR_LINE = "-" * 50  # 加長分隔線
+
+# --- 下載並快取中文字型 (專為網頁/圖片準備) ---
+@st.cache_resource
+def get_chinese_font():
+    font_path = "NotoSansTC-Regular.ttf"
+    if not os.path.exists(font_path):
+        # 從 Google Fonts 直接下載字型，解決伺服器沒有中文字型的問題
+        url = "https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
+        r = requests.get(url)
+        with open(font_path, "wb") as f:
+            f.write(r.content)
+    return font_path
+
 
 # --- 核心邏輯函式 ---
-
 def normalize_string(s):
     s = s.replace('啓', '啟')
     r = ""
@@ -71,100 +91,74 @@ def cn_to_int(s):
     return 0
 
 def fetch_verse_dict(book_no, chapter):
-    """API 完美破解版 (v7.3)"""
     query = f"?VERSION=1&output[]=content&output[]=unit_code&output[]=segment_code&chapter_code={book_no}&section_code={chapter}&ORDER=id"
     url = f"https://www.recoveryversion.com.tw//api/getVerses{query}"
-    
     verse_dict = {}
-    
     try:
         headers = {
-            'Accept': '*/*',
-            'Accept-Language': 'zh-TW,zh;q=0.9',
-            'Origin': 'https://recoveryversion.twgbr.org',
-            'Referer': 'https://recoveryversion.twgbr.org/',
+            'Accept': '*/*', 'Accept-Language': 'zh-TW,zh;q=0.9',
+            'Origin': 'https://recoveryversion.twgbr.org', 'Referer': 'https://recoveryversion.twgbr.org/',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
         }
-        
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status() 
         data = response.json()
-        
         items = data if isinstance(data, list) else data.get('data', [])
         if not items and isinstance(data, dict):
             for key in data:
                 if isinstance(data[key], list):
                     items = data[key]
                     break
-        
         if not items: return {"error": "伺服器回傳空資料"}
         
         for item in items:
             v_val = item.get('segment_code')
             if v_val is None or str(v_val).strip() == '':
                 v_val = item.get('unit_code', 0)
-                
             try: v_num = int(v_val)
             except: v_num = 0
-                
             content_html = item.get('content', '')
-            
             if v_num > 0 and content_html:
                 soup = BeautifulSoup(content_html, 'html.parser')
                 for sup in soup.find_all('sup'): sup.decompose()
                 for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c): popup.decompose()
-                    
-                clean_text = soup.get_text(separator='', strip=True)
-                verse_dict[v_num] = clean_text
-                
+                verse_dict[v_num] = soup.get_text(separator='', strip=True)
         return verse_dict
-
     except Exception as e:
         return {"error": f"連線錯誤: {str(e)}"}
 
 def parse_chapter_verse(text):
     match_mixed = re.match(r'^([一二三四五六七八九十]+)(\d+)$', text)
-    if match_mixed:
-        return cn_to_int(match_mixed.group(1)), int(match_mixed.group(2)), True
+    if match_mixed: return cn_to_int(match_mixed.group(1)), int(match_mixed.group(2)), True
     match_split = re.split(r'[:\s]+', text)
-    if len(match_split) >= 2:
-        return cn_to_int(match_split[0]), cn_to_int(match_split[1]), True
+    if len(match_split) >= 2: return cn_to_int(match_split[0]), cn_to_int(match_split[1]), True
     val_str = match_split[0]
     val = cn_to_int(val_str)
-    if val_str.isdigit():
-        return None, val, False
-    else:
-        return val, 1, True
+    if val_str.isdigit(): return None, val, False
+    return val, 1, True
 
 def parse_input_string(input_str):
     input_str = normalize_string(input_str)
     raw_items = re.split(r'[,，、\n]+', input_str)
     parsed_items = []
-    last_book_no = None
-    last_book_name = ""
-    last_chapter_val = None 
+    last_book_no, last_book_name, last_chapter_val = None, "", None
     sorted_books = sorted(BIBLE_BOOKS, key=len, reverse=True)
     
     for item in raw_items:
         item = item.strip()
         if not item: continue
-        curr_book_no = None
-        curr_book_name = ""
+        curr_book_no, curr_book_name = None, ""
         remain = item
         for b in sorted_books:
             if remain.startswith(b):
-                curr_book_name = b
-                curr_book_no = BOOK_MAP[b]
+                curr_book_name, curr_book_no = b, BOOK_MAP[b]
                 remain = remain[len(b):].strip()
                 break
         
         if curr_book_no is not None:
-            last_book_no = curr_book_no
-            last_book_name = curr_book_name
-            last_chapter_val = None 
+            last_book_no, last_book_name, last_chapter_val = curr_book_no, curr_book_name, None
         elif last_book_no is not None:
-            curr_book_no = last_book_no
-            curr_book_name = last_book_name
+            curr_book_no, curr_book_name = last_book_no, last_book_name
         else: continue
 
         suffix = ""
@@ -184,8 +178,7 @@ def parse_input_string(input_str):
             chapter_start, verse_start = p_ch, p_v
             last_chapter_val = chapter_start
         else:
-            if last_chapter_val is not None:
-                chapter_start, verse_start = last_chapter_val, p_v
+            if last_chapter_val is not None: chapter_start, verse_start = last_chapter_val, p_v
             else:
                 chapter_start, verse_start = (p_ch if p_ch else p_v), 1
                 last_chapter_val = chapter_start
@@ -194,61 +187,89 @@ def parse_input_string(input_str):
         if end_part:
             e_ch, e_v, e_has_ch = parse_chapter_verse(end_part)
             if e_has_ch:
-                chapter_end, verse_end = e_ch, e_v
-                last_chapter_val = chapter_end
+                chapter_end, verse_end, last_chapter_val = e_ch, e_v, e_ch
             else:
                 if e_v > 0: chapter_end, verse_end = chapter_start, e_v
 
         parsed_items.append({
-            'name': curr_book_name,
-            'no': curr_book_no,
-            'ch_start': chapter_start,
-            'v_start': verse_start,
-            'ch_end': chapter_end,
-            'v_end': verse_end,
-            'suffix': suffix
+            'name': curr_book_name, 'no': curr_book_no,
+            'ch_start': chapter_start, 'v_start': verse_start,
+            'ch_end': chapter_end, 'v_end': verse_end, 'suffix': suffix
         })
-        
     return parsed_items
 
 # --- PDF 產生函式 ---
 def generate_pdf(text_content):
     if not HAS_REPORTLAB: return None
-    
-    # 註冊繁體中文免安裝字型 (內建於 Adobe PDF 標準)
     pdfmetrics.registerFont(UnicodeCIDFont('MSung-Light'))
-    
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=50, leftMargin=50, topMargin=50, bottomMargin=50)
     styles = getSampleStyleSheet()
     
-    # 設定經文樣式：14號字，自動換行
-    verse_style = ParagraphStyle(
-        'VerseStyle', parent=styles['Normal'], fontName='MSung-Light',
-        fontSize=14, leading=22, wordWrap='CJK'
-    )
-    # 設定書卷標題樣式：16號字加粗，置中或靠左
-    title_style = ParagraphStyle(
-        'TitleStyle', parent=styles['Normal'], fontName='MSung-Light',
-        fontSize=16, leading=24, spaceAfter=10, textColor="#1F4E79"
-    )
+    verse_style = ParagraphStyle('VerseStyle', parent=styles['Normal'], fontName='MSung-Light', fontSize=14, leading=22, wordWrap='CJK')
+    title_style = ParagraphStyle('TitleStyle', parent=styles['Normal'], fontName='MSung-Light', fontSize=16, leading=24, spaceAfter=10, textColor="#1F4E79")
     
     story = []
-    lines = text_content.split('\n')
-    
-    for line in lines:
+    for line in text_content.split('\n'):
         line = line.strip()
-        if not line:
-            story.append(Spacer(1, 10))
-        elif line == "-----":
-            story.append(Spacer(1, 15))
-        elif line in FULL_BIBLE_BOOKS: # 若為書卷全名
-            story.append(Paragraph(f"<b>{line}</b>", title_style))
-        else: # 一般經文
-            story.append(Paragraph(line, verse_style))
+        if not line: story.append(Spacer(1, 10))
+        elif line == SEPARATOR_LINE: story.append(Spacer(1, 15))
+        elif line in FULL_BIBLE_BOOKS: story.append(Paragraph(f"<b>{line}</b>", title_style))
+        else: story.append(Paragraph(line, verse_style))
             
     doc.build(story)
     buffer.seek(0)
+    return buffer.getvalue()
+
+# --- 圖片產生函式 (附帶自動換行與中文支援) ---
+def generate_image(text_content):
+    if not HAS_PIL: return None
+    font_path = get_chinese_font()
+    font_size = 22
+    line_spacing = 10
+    margin = 40
+    max_width = 800
+    
+    try: font = ImageFont.truetype(font_path, font_size)
+    except: font = ImageFont.load_default() # 極端備用方案
+
+    # 自動文字換行演算法
+    wrapped_lines = []
+    for line in text_content.split('\n'):
+        line = line.strip()
+        if line == SEPARATOR_LINE:
+            wrapped_lines.append("-" * 35) # 圖片中的虛線稍微縮短一點比較美觀
+            continue
+            
+        current_line = ""
+        for char in line:
+            test_line = current_line + char
+            # 計算目前長度，若超過邊界就換行
+            if font.getlength(test_line) > (max_width - 2 * margin):
+                wrapped_lines.append(current_line)
+                current_line = char
+            else:
+                current_line = test_line
+        wrapped_lines.append(current_line)
+        wrapped_lines.append("") # 段落間距
+
+    # 計算圖片高度
+    total_height = 2 * margin + len(wrapped_lines) * (font_size + line_spacing)
+    
+    # 繪製圖片
+    img = Image.new('RGB', (max_width, total_height), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    
+    y_text = margin
+    for line in wrapped_lines:
+        if line: 
+            # 如果是書卷標題，改變顏色
+            text_color = (31, 78, 121) if line in FULL_BIBLE_BOOKS else (0, 0, 0)
+            draw.text((margin, y_text), line, font=font, fill=text_color)
+        y_text += font_size + line_spacing
+        
+    buffer = io.BytesIO()
+    img.save(buffer, format="PNG")
     return buffer.getvalue()
 
 
@@ -256,21 +277,17 @@ def generate_pdf(text_content):
 st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
 st.title("📖 恢復本經節抓取工具")
 
-# 初始化 Session State (用來控制文字框預設與清除)
 if "user_input" not in st.session_state:
-    st.session_state.user_input = "可一1~5\n創一1~3" # 預設文字變少
+    st.session_state.user_input = "可一1~5\n創一1~3"
 
 def clear_text():
     st.session_state.user_input = ""
 
 st.text_area("請輸入經節 (可多行或逗號分隔)", key="user_input", height=150)
 
-# 排列兩個按鈕
 col1, col2 = st.columns([1, 4])
-with col1:
-    btn_start = st.button("🚀 開始抓取", type="primary")
-with col2:
-    st.button("🗑️ 清除內容", on_click=clear_text)
+with col1: btn_start = st.button("🚀 開始抓取", type="primary")
+with col2: st.button("🗑️ 清除內容", on_click=clear_text)
 
 if btn_start:
     input_text = st.session_state.user_input
@@ -290,7 +307,6 @@ if btn_start:
             
             for current_ch in range(t['ch_start'], t['ch_end'] + 1):
                 verse_dict = fetch_verse_dict(t['no'], current_ch)
-                
                 if verse_dict and "error" in verse_dict:
                     st.error(f"抓取 {t['name']} {current_ch} 章時發生錯誤: {verse_dict['error']}")
                     continue
@@ -303,12 +319,11 @@ if btn_start:
                     for v in sorted(verse_dict.keys()):
                         if start_v <= v <= end_v:
                             found_any = True
-                            # 【新增功能 2】判斷是否需要印出「書卷全名」與「分隔線」
                             if t['no'] != current_book_no:
                                 if current_book_no is not None:
-                                    final_lines.append("-----") # 不同書卷之間加上分隔線
+                                    final_lines.append(SEPARATOR_LINE)
                                 full_book_name = BOOK_FULL_MAP.get(t['name'], t['name'])
-                                final_lines.append(full_book_name) # 加上完整的書卷名稱
+                                final_lines.append(full_book_name)
                                 current_book_no = t['no']
                             
                             content = verse_dict[v]
@@ -316,7 +331,6 @@ if btn_start:
                             
                     if not found_any:
                         final_lines.append(f"[{t['name']} {current_ch}:{start_v} 無此節]")
-                
                 time.sleep(0.1) 
 
         if not final_lines:
@@ -329,15 +343,27 @@ if btn_start:
             st.code(final_text, language="text")
             
             # --- 匯出按鈕區 ---
-            if not HAS_REPORTLAB:
-                st.warning("⚠️ 系統未安裝 `reportlab` 套件，無法提供 PDF 下載功能。(請使用 pip install reportlab 安裝)")
-                
-            dl_col1, dl_col2 = st.columns(2)
+            st.write("### 📥 下載與匯出")
+            dl_col1, dl_col2, dl_col3 = st.columns(3)
+            
             with dl_col1:
-                st.download_button("📝 下載為 .txt 檔案", data=final_text, file_name="bible_verses.txt", mime="text/plain")
+                st.download_button("📝 純文字 (.txt)", data=final_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
             
             with dl_col2:
                 if HAS_REPORTLAB:
                     pdf_data = generate_pdf(final_text)
                     if pdf_data:
-                        st.download_button("📄 下載為 14號字 PDF", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf")
+                        st.download_button("📄 PDF 文件 (14號字)", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
+                else:
+                    st.button("📄 PDF (未安裝套件)", disabled=True, use_container_width=True)
+                    
+            with dl_col3:
+                if HAS_PIL:
+                    img_data = generate_image(final_text)
+                    if img_data:
+                        st.download_button("🖼️ 下載為圖片 (.png)", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True)
+                else:
+                    st.button("🖼️ 圖片 (未安裝套件)", disabled=True, use_container_width=True)
+                    
+            if not HAS_REPORTLAB or not HAS_PIL:
+                st.caption("提示：如需 PDF 或圖片功能，請確認伺服器有安裝 `reportlab` 與 `Pillow` 套件。")
