@@ -49,50 +49,49 @@ def cn_to_int(s):
     return 0
 
 def fetch_verse_dict(book_no, chapter):
-    """v7.0：使用官方隱藏 API 直接獲取資料，速度最快、最穩定"""
+    """v7.1：修正 URL 編碼與補齊防爬蟲 Headers"""
     url = "https://www.recoveryversion.com.tw/api/getVerses"
-    # 根據取得的 API 結構，chapter_code = 卷，section_code = 章
-    query_string = f"?VERSION=1&output[]=content&output[]=unit_code&chapter_code={book_no}&section_code={chapter}&ORDER=id"
+    
+    # 【關鍵修正1】手動將 output[] 編碼為 output%5B%5D，確保後端框架能解析為陣列
+    query_string = f"?VERSION=1&output%5B%5D=content&output%5B%5D=unit_code&chapter_code={book_no}&section_code={chapter}&ORDER=id"
     verse_dict = {}
     
     try:
+        # 【關鍵修正2】補齊 Referer 與 X-Requested-With，偽裝成正常網站內的 Ajax 請求
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-            'Accept': 'application/json, text/plain, */*'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Referer': 'https://www.recoveryversion.com.tw/',
+            'X-Requested-With': 'XMLHttpRequest'
         }
         
-        # 呼叫 API
         response = requests.get(url + query_string, headers=headers, timeout=15)
-        response.raise_for_status() # 若連線失敗則拋出例外
+        response.raise_for_status() 
         data = response.json()
         
-        # API 通常回傳陣列 (List)，或是包在一個物件裡，我們動態處理
         items = data if isinstance(data, list) else data.get('data', [])
         
-        # 如果 data 是一個字典且沒有 'data' 鍵，找出裡面是陣列的欄位
         if not items and isinstance(data, dict):
             for key in data:
                 if isinstance(data[key], list):
                     items = data[key]
                     break
         
+        # 【關鍵修正3】如果伺服器依舊回傳空資料，主動拋出錯誤供前端顯示，而不是默默失敗
+        if not items:
+            return {"error": "伺服器回傳空資料 (API 參數可能遭阻擋或格式已變更)"}
+        
         for item in items:
-            v_num = int(item.get('unit_code', 0)) # API 中的 'unit_code' 就是節數
+            v_num = int(item.get('unit_code', 0)) 
             content_html = item.get('content', '')
             
             if v_num > 0 and content_html:
-                # 雖然是 API，但內容可能還是夾帶了註解的 HTML 標籤
-                # 透過 BeautifulSoup 把那些註解數字和多餘標籤剝除
                 soup = BeautifulSoup(content_html, 'html.parser')
-                
-                # 移除所有的 <sup> (註解數字)
                 for sup in soup.find_all('sup'):
                     sup.decompose()
-                # 移除隱藏的彈出視窗
                 for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c):
                     popup.decompose()
                     
-                # 取得乾淨的純文字經文
                 clean_text = soup.get_text(separator='', strip=True)
                 verse_dict[v_num] = clean_text
                 
@@ -227,9 +226,11 @@ if st.button("開始抓取"):
             for current_ch in range(t['ch_start'], t['ch_end'] + 1):
                 verse_dict = fetch_verse_dict(t['no'], current_ch)
                 
-                # 若發生錯誤，印出錯誤訊息幫助除錯
+                # 【關鍵修正4】清楚列出為何失敗，而不只是跳過
                 if verse_dict and "error" in verse_dict:
-                    st.error(f"抓取 {t['name']} 第 {current_ch} 章時發生錯誤: {verse_dict['error']}")
+                    err_msg = f"抓取 {t['name']} {current_ch} 章時發生錯誤: {verse_dict['error']}"
+                    st.error(err_msg)
+                    task_lines.append(f"[{t['name']} {current_ch} 章抓取失敗: {verse_dict['error']}]")
                     continue
                 
                 if verse_dict:
@@ -242,7 +243,7 @@ if st.button("開始抓取"):
                             line = f"{t['name']} {current_ch}:{v} {content}"
                             task_lines.append(line)
                 
-                time.sleep(0.1) # 因為是 API，延遲可以縮短，抓取更順暢
+                time.sleep(0.1) 
 
             if not task_lines:
                  final_output_blocks.append(f"{t['name']} {t['ch_start']}:{t['v_start']} (無法抓取或無內容)")
