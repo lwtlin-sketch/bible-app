@@ -10,7 +10,6 @@ import os
 try:
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.lib.fonts import addMapping
     from reportlab.lib.pagesizes import A4
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -47,7 +46,7 @@ BOOK_MAP = {name: i+1 for i, name in enumerate(BIBLE_BOOKS)}
 BOOK_FULL_MAP = {name: full for name, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
 SEPARATOR_LINE = "-" * 50  
 
-# --- 完美中文字型處理機制 ---
+# --- 完美中文字型處理機制 (解決 Streamlit Cloud 重新載入問題) ---
 @st.cache_resource
 def setup_chinese_font():
     """自動下載並回傳思源黑體的本機路徑"""
@@ -63,15 +62,19 @@ def setup_chinese_font():
             st.error(f"下載字型失敗: {str(e)}")
             return None
     
+    # 註冊給 PDF (這段非常關鍵，解決 Bold 的崩潰問題)
     if HAS_REPORTLAB and os.path.exists(font_filename):
         try:
-            # 1. 註冊字型檔
+            # 1. 註冊實體字型
             pdfmetrics.registerFont(TTFont('NotoSansTC', font_filename))
-            # 2. 【關鍵修復】告訴 ReportLab，不管是常規(0,0)、粗體(1,0)、斜體(0,1)，通通使用 NotoSansTC
-            addMapping('NotoSansTC', 0, 0, 'NotoSansTC') 
-            addMapping('NotoSansTC', 1, 0, 'NotoSansTC')
-            addMapping('NotoSansTC', 0, 1, 'NotoSansTC')
-            addMapping('NotoSansTC', 1, 1, 'NotoSansTC')
+            # 2. 註冊字型家族 (這是唯一能讓 Streamlit Cloud 網頁上 <b> 標籤不崩潰的寫法)
+            pdfmetrics.registerFontFamily(
+                'NotoSansTC', 
+                normal='NotoSansTC', 
+                bold='NotoSansTC', 
+                italic='NotoSansTC', 
+                boldItalic='NotoSansTC'
+            )
         except Exception:
             pass
             
@@ -235,7 +238,7 @@ def generate_pdf(text_content):
         if not line: story.append(Spacer(1, 10))
         elif line == SEPARATOR_LINE: story.append(Spacer(1, 15))
         elif line in FULL_BIBLE_BOOKS: 
-            # 重新加回 <b> 標籤測試！有了 addMapping，現在可以用粗體了！
+            # 這次絕對沒問題了！因為我們註冊了 FontFamily
             story.append(Paragraph(f"<b>{line}</b>", title_style))
         else: 
             story.append(Paragraph(line, verse_style))
