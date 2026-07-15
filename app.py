@@ -49,31 +49,25 @@ def cn_to_int(s):
     return 0
 
 def fetch_verse_dict(book_no, chapter):
-    """v7.2：完美破解版，偽裝 Origin 與 Referer，並使用標準 Params 傳遞"""
-    url = "https://www.recoveryversion.com.tw/api/getVerses"
+    """v7.3：完美破解版，強制原始 [] 參數，並正確解析 segment_code 作為節數"""
     
-    # 【關鍵修正1】交給 requests 自動進行完美編碼，並補上 segment_code
-    params = {
-        'VERSION': '1',
-        'output[]': ['content', 'unit_code', 'segment_code'],
-        'chapter_code': book_no,
-        'section_code': chapter,
-        'ORDER': 'id'
-    }
+    # 【關鍵修正1】強制手動組合字串，不讓 Python 自動編碼 []，並加入你紀錄中的 segment_code 與 // 雙斜線
+    query = f"?VERSION=1&output[]=content&output[]=unit_code&output[]=segment_code&chapter_code={book_no}&section_code={chapter}&ORDER=id"
+    url = f"https://www.recoveryversion.com.tw//api/getVerses{query}"
     
     verse_dict = {}
     
     try:
-        # 【關鍵修正2】完美複製你的瀏覽器行為 (Origin/Referer 改為 twgbr.org)
+        # 【關鍵修正2】使用你提供的確切 Origin 與 Referer
         headers = {
             'Accept': '*/*',
-            'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Language': 'zh-TW,zh;q=0.9',
             'Origin': 'https://recoveryversion.twgbr.org',
             'Referer': 'https://recoveryversion.twgbr.org/',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
         }
         
-        response = requests.get(url, headers=headers, params=params, timeout=15)
+        response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status() 
         data = response.json()
         
@@ -85,10 +79,19 @@ def fetch_verse_dict(book_no, chapter):
                     break
         
         if not items:
-            return {"error": "伺服器回傳空資料"}
+            return {"error": "伺服器回傳空資料 (IP可能遭暫時阻擋)"}
         
         for item in items:
-            v_num = int(item.get('unit_code', 0)) 
+            # 【關鍵修正3】優先抓取 segment_code，這才是真正的「第幾節」
+            v_val = item.get('segment_code')
+            if v_val is None or str(v_val).strip() == '':
+                v_val = item.get('unit_code', 0)
+                
+            try:
+                v_num = int(v_val)
+            except:
+                v_num = 0
+                
             content_html = item.get('content', '')
             
             if v_num > 0 and content_html:
@@ -101,10 +104,14 @@ def fetch_verse_dict(book_no, chapter):
                 clean_text = soup.get_text(separator='', strip=True)
                 verse_dict[v_num] = clean_text
                 
+        # 【超級防呆】如果有抓到資料，但我們解析不到節數，直接印出第一筆資料供我們查看
+        if not verse_dict and items:
+            return {"error": f"解析節數失敗，資料結構變更為：{str(items[:1])}"}
+                
         return verse_dict
 
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"連線錯誤: {str(e)}"}
 
 def parse_chapter_verse(text):
     match_mixed = re.match(r'^([一二三四五六七八九十]+)(\d+)$', text)
@@ -232,10 +239,11 @@ if st.button("開始抓取"):
             for current_ch in range(t['ch_start'], t['ch_end'] + 1):
                 verse_dict = fetch_verse_dict(t['no'], current_ch)
                 
+                # 錯誤攔截：這次如果發生錯誤，會強制作為結果輸出
                 if verse_dict and "error" in verse_dict:
                     err_msg = f"抓取 {t['name']} {current_ch} 章時發生錯誤: {verse_dict['error']}"
                     st.error(err_msg)
-                    task_lines.append(f"[{t['name']} {current_ch} 章抓取失敗]")
+                    task_lines.append(err_msg)
                     continue
                 
                 if verse_dict:
@@ -248,7 +256,7 @@ if st.button("開始抓取"):
                             line = f"{t['name']} {current_ch}:{v} {content}"
                             task_lines.append(line)
                 
-                time.sleep(0.1) # 高速連線，稍微延遲避免伺服器負載過大
+                time.sleep(0.1) 
 
             if not task_lines:
                  final_output_blocks.append(f"{t['name']} {t['ch_start']}:{t['v_start']} (無法抓取或無內容)")
