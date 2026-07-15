@@ -6,18 +6,19 @@ import time
 import io
 import os
 
-# 嘗試載入 PDF 與圖片套件
+# --- 嘗試載入 PDF 套件 ---
 try:
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.lib.pagesizes import A4
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.fonts import addMapping  # <--- 新增這個，用來解決 <b> 標籤崩潰
+    from reportlab.lib.fonts import addMapping
     HAS_REPORTLAB = True
 except ImportError:
     HAS_REPORTLAB = False
 
+# --- 嘗試載入 圖片 套件 ---
 try:
     from PIL import Image, ImageDraw, ImageFont
     HAS_PIL = True
@@ -48,39 +49,51 @@ BOOK_FULL_MAP = {name: full for name, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)
 SEPARATOR_LINE = "-" * 50  
 
 # --- 完美中文字型處理機制 ---
-
 @st.cache_resource
 def download_chinese_font():
-    """只負責下載字型，利用 cache 避免重複下載 (不再把註冊寫在這裡)"""
+    """負責下載字型，包含壞檔偵測與防護"""
     font_filename = "NotoSansTC-Regular.ttf"
+    
+    # 防護機制 1：如果檔案存在，但太小(不到 1MB)，代表下載到錯誤網頁(壞檔)，直接刪除
+    if os.path.exists(font_filename):
+        if os.path.getsize(font_filename) < 1000000:
+            os.remove(font_filename)
+            
+    # 防護機制 2：使用 jsdelivr CDN 取代 github raw，避免被擋
     if not os.path.exists(font_filename):
-        font_url = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
+        font_url = "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosanstc/NotoSansTC-Regular.ttf"
         try:
-            r = requests.get(font_url, timeout=10)
+            r = requests.get(font_url, timeout=15)
             if r.status_code == 200:
                 with open(font_filename, "wb") as f:
                     f.write(r.content)
-        except Exception as e:
-            st.error(f"下載字型失敗: {str(e)}")
+            else:
+                return None
+        except Exception:
             return None
-    return font_filename
+            
+    # 二次確認檔案是否正常
+    if os.path.exists(font_filename) and os.path.getsize(font_filename) > 1000000:
+        return font_filename
+    return None
 
 FONT_PATH = download_chinese_font()
+FONT_LOADED = False
 
-# 這段放在函數外面，確保 Streamlit 每次重新整理或按鈕點擊時，都會為當下的 ReportLab 環境註冊字型
-if HAS_REPORTLAB and FONT_PATH and os.path.exists(FONT_PATH):
+# 每次頁面重整都會執行這段，確保 ReportLab 記得字型
+if HAS_REPORTLAB and FONT_PATH:
     try:
-        # 1. 註冊實體字型
         pdfmetrics.registerFont(TTFont('NotoSansTC', FONT_PATH))
-        # 2. 強制設定 Mapping，告訴 ReportLab 當遇到 <b> 或 <i> 時，都直接借用原本的字型檔
-        addMapping('NotoSansTC', 0, 0, 'NotoSansTC') # Normal
-        addMapping('NotoSansTC', 1, 0, 'NotoSansTC') # Bold (粗體)
-        addMapping('NotoSansTC', 0, 1, 'NotoSansTC') # Italic (斜體)
-        addMapping('NotoSansTC', 1, 1, 'NotoSansTC') # Bold & Italic (粗斜體)
-    except Exception as e:
-        st.warning(f"ReportLab 字型註冊異常: {e}")
+        # 建立 mapping 解決 <b> 標籤報錯
+        addMapping('NotoSansTC', 0, 0, 'NotoSansTC')
+        addMapping('NotoSansTC', 1, 0, 'NotoSansTC')
+        addMapping('NotoSansTC', 0, 1, 'NotoSansTC')
+        addMapping('NotoSansTC', 1, 1, 'NotoSansTC')
+        FONT_LOADED = True
+    except Exception:
+        FONT_LOADED = False
 
-# --- 後續的核心邏輯函式 (def normalize_string(s)...) 保持不變 ---
+
 # --- 核心邏輯函式 ---
 def normalize_string(s):
     s = s.replace('啓', '啟')
@@ -120,7 +133,7 @@ def fetch_verse_dict(book_no, chapter):
         headers = {
             'Accept': '*/*', 'Accept-Language': 'zh-TW,zh;q=0.9',
             'Origin': 'https://recoveryversion.twgbr.org', 'Referer': 'https://recoveryversion.twgbr.org/',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0'
         }
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status() 
@@ -222,7 +235,7 @@ def parse_input_string(input_str):
 
 # --- PDF 產生函式 ---
 def generate_pdf(text_content):
-    if not HAS_REPORTLAB or not FONT_PATH: return None
+    if not HAS_REPORTLAB or not FONT_LOADED: return None
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=50, leftMargin=50, topMargin=50, bottomMargin=50)
     styles = getSampleStyleSheet()
@@ -236,18 +249,20 @@ def generate_pdf(text_content):
         if not line: story.append(Spacer(1, 10))
         elif line == SEPARATOR_LINE: story.append(Spacer(1, 15))
         elif line in FULL_BIBLE_BOOKS: 
-            # 這次絕對沒問題了！因為我們註冊了 FontFamily
             story.append(Paragraph(f"<b>{line}</b>", title_style))
         else: 
             story.append(Paragraph(line, verse_style))
             
-    doc.build(story)
-    buffer.seek(0)
-    return buffer.getvalue()
+    try:
+        doc.build(story)
+        buffer.seek(0)
+        return buffer.getvalue()
+    except Exception as e:
+        return None
 
 # --- 圖片產生函式 ---
 def generate_image(text_content):
-    if not HAS_PIL or not FONT_PATH: return None
+    if not HAS_PIL or not FONT_PATH or not os.path.exists(FONT_PATH): return None
     font_size = 22
     line_spacing = 10
     margin = 40
@@ -278,7 +293,6 @@ def generate_image(text_content):
         wrapped_lines.append("")
 
     total_height = 2 * margin + len(wrapped_lines) * (font_size + line_spacing)
-    
     img = Image.new('RGB', (max_width, total_height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
     
@@ -292,7 +306,6 @@ def generate_image(text_content):
     buffer = io.BytesIO()
     img.save(buffer, format="PNG")
     return buffer.getvalue()
-
 
 # --- Streamlit 介面邏輯 ---
 st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
@@ -318,7 +331,7 @@ if btn_start:
     if not input_text.strip():
         st.warning("請輸入內容！")
     else:
-        st.info("正在透過 API 高速連線抓取中，請稍候...")
+        st.info("正在透過 API 抓取中，請稍候...")
         progress_bar = st.progress(0)
         tasks = parse_input_string(input_text)
         
@@ -365,7 +378,6 @@ if btn_start:
 if st.session_state.final_text:
     final_text = st.session_state.final_text
     st.success("🎉 抓取完成！")
-    
     st.subheader("抓取結果")
     st.code(final_text, language="text")
     
@@ -376,17 +388,21 @@ if st.session_state.final_text:
         st.download_button("📝 純文字 (.txt)", data=final_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
     
     with dl_col2:
-        if HAS_REPORTLAB and FONT_PATH:
+        if HAS_REPORTLAB and FONT_LOADED:
             pdf_data = generate_pdf(final_text)
             if pdf_data:
-                st.download_button("📄 PDF 文件 (14號字)", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
+                st.download_button("📄 PDF 文件", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
+            else:
+                st.button("📄 PDF (生成失敗)", disabled=True, use_container_width=True)
         else:
-            st.button("📄 PDF (字型載入失敗)", disabled=True, use_container_width=True)
+            st.button("📄 PDF (字型維護中)", disabled=True, use_container_width=True)
             
     with dl_col3:
-        if HAS_PIL and FONT_PATH:
+        if HAS_PIL and FONT_PATH and os.path.exists(FONT_PATH):
             img_data = generate_image(final_text)
             if img_data:
-                st.download_button("🖼️ 下載為圖片 (.png)", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True)
+                st.download_button("🖼️ 圖片 (.png)", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True)
+            else:
+                st.button("🖼️ 圖片 (生成失敗)", disabled=True, use_container_width=True)
         else:
-            st.button("🖼️ 圖片 (字型載入失敗)", disabled=True, use_container_width=True)
+            st.button("🖼️ 圖片 (字型維護中)", disabled=True, use_container_width=True)
