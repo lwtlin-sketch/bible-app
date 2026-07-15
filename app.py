@@ -5,7 +5,6 @@ import re
 import time
 import io
 import os
-import tempfile
 
 # --- 嘗試載入 PDF 套件 ---
 try:
@@ -49,36 +48,11 @@ BOOK_MAP = {name: i+1 for i, name in enumerate(BIBLE_BOOKS)}
 BOOK_FULL_MAP = {name: full for name, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
 SEPARATOR_LINE = "-" * 50  
 
-# --- 終極中文字型處理機制 (存入暫存區，避開雲端權限問題) ---
-@st.cache_resource
-def get_chinese_font():
-    """將字型下載到系統的 Temp 資料夾，保證一定有權限寫入"""
-    temp_dir = tempfile.gettempdir()
-    font_path = os.path.join(temp_dir, "NotoSansTC-Regular.ttf")
-    
-    # 檢查是否已有合法字型檔 (大於 1MB)
-    if os.path.exists(font_path) and os.path.getsize(font_path) > 1000000:
-        return font_path
-        
-    # 下載字型
-    font_url = "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosanstc/NotoSansTC-Regular.ttf"
-    try:
-        r = requests.get(font_url, timeout=15)
-        if r.status_code == 200:
-            with open(font_path, "wb") as f:
-                f.write(r.content)
-    except Exception:
-        pass
-        
-    if os.path.exists(font_path) and os.path.getsize(font_path) > 1000000:
-        return font_path
-    return None
-
-FONT_PATH = get_chinese_font()
+# --- 讀取 GitHub 內的本機字型 ---
+FONT_PATH = "NotoSansTC-Regular.ttf"
 FONT_LOADED = False
 
-# 註冊字型給 ReportLab (每次重整網頁都要執行)
-if FONT_PATH and HAS_REPORTLAB:
+if os.path.exists(FONT_PATH) and HAS_REPORTLAB:
     try:
         pdfmetrics.registerFont(TTFont('NotoSansTC', FONT_PATH))
         addMapping('NotoSansTC', 0, 0, 'NotoSansTC') # 正常
@@ -88,7 +62,6 @@ if FONT_PATH and HAS_REPORTLAB:
         FONT_LOADED = True
     except Exception:
         FONT_LOADED = False
-
 
 # --- 核心邏輯函式 ---
 def normalize_string(s):
@@ -229,13 +202,44 @@ def parse_input_string(input_str):
         })
     return parsed_items
 
-# --- PDF 產生函式 ---
+# --- 產生 網頁 (HTML) ---
+def generate_html(text_content):
+    html_template = """
+    <!DOCTYPE html>
+    <html lang="zh-TW">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>經節抓取結果</title>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
+            body { font-family: 'Noto Sans TC', sans-serif; line-height: 1.8; color: #333; max-width: 800px; margin: 0 auto; padding: 40px 20px; }
+            .book-title { color: #1F4E79; font-size: 24px; font-weight: 700; margin-top: 30px; margin-bottom: 15px; border-bottom: 2px solid #1F4E79; padding-bottom: 5px; }
+            .verse { font-size: 18px; margin-bottom: 12px; text-align: justify; }
+            .verse strong { color: #B22222; margin-right: 8px; }
+            .separator { text-align: center; margin: 40px 0; color: #ccc; letter-spacing: 5px; }
+        </style>
+    </head>
+    <body>
+    """
+    for line in text_content.split('\n'):
+        line = line.strip()
+        if not line: continue
+        elif line == SEPARATOR_LINE: html_template += '<div class="separator">✦ ✦ ✦</div>\n'
+        elif line in FULL_BIBLE_BOOKS: html_template += f'<div class="book-title">{line}</div>\n'
+        else:
+            parts = line.split(" ", 1)
+            if len(parts) == 2 and ":" in parts[0]: html_template += f'<div class="verse"><strong>{parts[0]}</strong>{parts[1]}</div>\n'
+            else: html_template += f'<div class="verse">{line}</div>\n'
+    html_template += "</body></html>"
+    return html_template
+
+# --- 產生 PDF ---
 def generate_pdf(text_content):
     if not HAS_REPORTLAB or not FONT_LOADED: return None
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=50, leftMargin=50, topMargin=50, bottomMargin=50)
     styles = getSampleStyleSheet()
-    
     verse_style = ParagraphStyle('VerseStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=14, leading=22, wordWrap='CJK')
     title_style = ParagraphStyle('TitleStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=16, leading=24, spaceAfter=10, textColor="#1F4E79")
     
@@ -244,10 +248,8 @@ def generate_pdf(text_content):
         line = line.strip()
         if not line: story.append(Spacer(1, 10))
         elif line == SEPARATOR_LINE: story.append(Spacer(1, 15))
-        elif line in FULL_BIBLE_BOOKS: 
-            story.append(Paragraph(f"<b>{line}</b>", title_style))
-        else: 
-            story.append(Paragraph(line, verse_style))
+        elif line in FULL_BIBLE_BOOKS: story.append(Paragraph(f"<b>{line}</b>", title_style))
+        else: story.append(Paragraph(line, verse_style))
             
     try:
         doc.build(story)
@@ -256,18 +258,16 @@ def generate_pdf(text_content):
     except Exception:
         return None
 
-# --- 圖片產生函式 (恢復功能) ---
+# --- 產生 圖片 (PNG) ---
 def generate_image(text_content):
-    if not HAS_PIL or not FONT_PATH: return None
+    if not HAS_PIL or not os.path.exists(FONT_PATH): return None
     font_size = 22
     line_spacing = 10
     margin = 40
     max_width = 800
     
-    try: 
-        font = ImageFont.truetype(FONT_PATH, font_size)
-    except Exception: 
-        return None 
+    try: font = ImageFont.truetype(FONT_PATH, font_size)
+    except Exception: return None 
 
     wrapped_lines = []
     for line in text_content.split('\n'):
@@ -308,6 +308,11 @@ def generate_image(text_content):
 
 # --- Streamlit 介面邏輯 ---
 st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
+
+# 如果找不到字型檔，在網頁最上方給予提示
+if not os.path.exists(FONT_PATH):
+    st.error("⚠️ 系統找不到 `NotoSansTC-Regular.ttf`！請確認您的 GitHub 專案根目錄下有這個檔案，且檔名大小寫完全一致。")
+
 st.title("📖 恢復本經節抓取工具")
 
 if "user_input" not in st.session_state:
@@ -382,28 +387,32 @@ if st.session_state.final_text:
     
     st.write("### 📥 下載與匯出")
     
-    # 建立三欄，直接放 純文字、PDF、圖片
-    dl_col1, dl_col2, dl_col3 = st.columns(3)
+    # 建立 4 欄按鈕區：文字、網頁、PDF、圖片
+    dl_col1, dl_col2, dl_col3, dl_col4 = st.columns(4)
     
     with dl_col1:
         st.download_button("📝 純文字 (.txt)", data=final_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
-    
+        
     with dl_col2:
+        html_data = generate_html(final_text)
+        st.download_button("🌐 網頁 (.html)", data=html_data, file_name="bible_verses.html", mime="text/html", use_container_width=True)
+    
+    with dl_col3:
         if HAS_REPORTLAB and FONT_LOADED:
             pdf_data = generate_pdf(final_text)
             if pdf_data:
-                st.download_button("📄 PDF 文件", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
+                st.download_button("📄 PDF", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
             else:
-                st.button("📄 PDF (產生失敗)", disabled=True, use_container_width=True)
+                st.button("📄 PDF (錯誤)", disabled=True, use_container_width=True)
         else:
-            st.button("📄 載入中...", disabled=True, use_container_width=True)
+            st.button("📄 缺字型", disabled=True, use_container_width=True, help="請確認 GitHub 根目錄有 NotoSansTC-Regular.ttf")
             
-    with dl_col3:
-        if HAS_PIL and FONT_PATH:
+    with dl_col4:
+        if HAS_PIL and os.path.exists(FONT_PATH):
             img_data = generate_image(final_text)
             if img_data:
                 st.download_button("🖼️ 圖片 (.png)", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True)
             else:
-                st.button("🖼️ 圖片 (產生失敗)", disabled=True, use_container_width=True)
+                st.button("🖼️ 圖片 (錯誤)", disabled=True, use_container_width=True)
         else:
-            st.button("🖼️ 載入中...", disabled=True, use_container_width=True)
+            st.button("🖼️ 缺字型", disabled=True, use_container_width=True, help="請確認 GitHub 根目錄有 NotoSansTC-Regular.ttf")
