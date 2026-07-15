@@ -217,8 +217,9 @@ def generate_html(text_content):
             @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
             body { font-family: 'Noto Sans TC', sans-serif; line-height: 1.5; color: #333; max-width: 800px; margin: 0 auto; padding: 40px 20px; }
             .book-title { color: #1F4E79; font-size: 24px; font-weight: 700; margin-top: 30px; margin-bottom: 12px; border-bottom: 2px solid #1F4E79; padding-bottom: 5px; }
-            .verse { font-size: 18px; margin-bottom: 8px; text-align: justify; }
-            .verse strong { color: #B22222; margin-right: 6px; }
+            /* 網頁版縮排設計：利用 Flexbox 完美對齊 */
+            .verse { display: flex; font-size: 18px; margin-bottom: 8px; text-align: justify; }
+            .verse .ref { flex-shrink: 0; margin-right: 6px; color: #B22222; font-weight: bold; }
             .separator { text-align: center; margin: 25px 0; color: #ccc; letter-spacing: 5px; }
         </style>
     </head>
@@ -230,16 +231,20 @@ def generate_html(text_content):
         elif line == SEPARATOR_LINE: html_template += '<div class="separator">✦ ✦ ✦</div>\n'
         elif line in FULL_BIBLE_BOOKS: html_template += f'<div class="book-title">{line}</div>\n'
         else:
-            parts = line.split(" ", 1)
-            if len(parts) == 2 and ":" in parts[0]: html_template += f'<div class="verse"><strong>{parts[0]}</strong>{parts[1]}</div>\n'
-            else: html_template += f'<div class="verse">{line}</div>\n'
+            # 正則表達式：捕捉前面的經節號碼 (例如 "可 1:1" 或 "1:1")
+            match = re.match(r'^([一-龥]*\s*\d+:\d+)\s+(.*)', line)
+            if match:
+                ref = match.group(1)
+                text = match.group(2)
+                html_template += f'<div class="verse"><span class="ref">{ref}</span><span class="text">{text}</span></div>\n'
+            else:
+                html_template += f'<div class="verse">{line}</div>\n'
     html_template += "</body></html>"
     return html_template
 
 # --- 產生「另開新分頁」的共用按鈕元件 ---
 def render_open_new_tab_button(data_bytes, mime_type, button_text):
     b64_data = base64.b64encode(data_bytes).decode('utf-8')
-    
     button_html = f"""
     <!DOCTYPE html>
     <html>
@@ -282,7 +287,19 @@ def generate_pdf(text_content):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=50, leftMargin=50, topMargin=50, bottomMargin=50)
     styles = getSampleStyleSheet()
-    verse_style = ParagraphStyle('VerseStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=14, leading=22, spaceAfter=8, wordWrap='CJK')
+    
+    # 加入首行突出 (Hanging Indent) 讓 PDF 也更美觀
+    verse_style = ParagraphStyle(
+        'VerseStyle', 
+        parent=styles['Normal'], 
+        fontName='NotoSansTC', 
+        fontSize=14, 
+        leading=22, 
+        spaceAfter=8, 
+        wordWrap='CJK',
+        leftIndent=40,       # 整體往右縮排
+        firstLineIndent=-40  # 第一行拉回來，形成凸排
+    )
     title_style = ParagraphStyle('TitleStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=16, leading=24, spaceAfter=12, textColor="#1F4E79")
     
     story = []
@@ -307,69 +324,87 @@ def generate_image(text_content):
     line_spacing = 6      
     margin = 40
     max_width = 800
+    usable_width = max_width - 2 * margin
     
     try: font = ImageFont.truetype(FONT_PATH, font_size)
     except Exception: return None 
 
-    wrapped_lines = []
+    wrapped_lines = [] # 儲存格式: (文字, x_縮排量)
     for line in text_content.split('\n'):
         line = line.strip()
         if not line: continue
         
-        # 處理標題與分隔線
         if line in FULL_BIBLE_BOOKS:
-            wrapped_lines.append(line)
-            wrapped_lines.append("_SPACER_")
+            wrapped_lines.append((line, 0))
+            wrapped_lines.append(("_SPACER_", 0))
             continue
         if line == SEPARATOR_LINE:
-            wrapped_lines.append("_SPACER_")
-            wrapped_lines.append("-" * 35) 
-            wrapped_lines.append("_SPACER_")
+            wrapped_lines.append(("_SPACER_", 0))
+            wrapped_lines.append(("-" * 35, 0)) 
+            wrapped_lines.append(("_SPACER_", 0))
             continue
             
+        # 計算此節經文的「縮排寬度」(經節號碼 + 空白的長度)
+        indent_width = 0
+        match = re.match(r'^([一-龥]*\s*\d+:\d+\s+)', line)
+        if match:
+            prefix = match.group(1)
+            try: indent_width = font.getlength(prefix)
+            except: indent_width = font.getsize(prefix)[0]
+
         current_line = ""
+        is_first_line = True
+        
         for char in line:
             test_line = current_line + char
             try: text_len = font.getlength(test_line)
             except: text_len = font.getsize(test_line)[0] 
             
-            if text_len > (max_width - 2 * margin):
-                wrapped_lines.append(current_line)
+            # 第一行可用寬度較大，第二行開始需扣除縮排寬度
+            current_max_width = usable_width if is_first_line else (usable_width - indent_width)
+            
+            if text_len > current_max_width:
+                # 裝不下，換行
+                if is_first_line:
+                    wrapped_lines.append((current_line, 0))
+                    is_first_line = False
+                else:
+                    wrapped_lines.append((current_line, indent_width))
                 current_line = char
             else:
                 current_line = test_line
+                
         if current_line:
-            wrapped_lines.append(current_line)
-        wrapped_lines.append("_VERSE_SPACER_") # 取代原本的空白行，用來做經節間距
+            if is_first_line:
+                wrapped_lines.append((current_line, 0))
+            else:
+                wrapped_lines.append((current_line, indent_width))
+                
+        wrapped_lines.append(("_VERSE_SPACER_", 0)) 
 
     # 計算總高度
     total_height = 2 * margin
-    for line in wrapped_lines:
-        if line == "_SPACER_": total_height += font_size
-        elif line == "_VERSE_SPACER_": total_height += font_size // 2
+    for text, _ in wrapped_lines:
+        if text == "_SPACER_": total_height += font_size
+        elif text == "_VERSE_SPACER_": total_height += font_size // 2
         else: total_height += font_size + line_spacing
             
     img = Image.new('RGB', (max_width, total_height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
     
     y_text = margin
-    for line in wrapped_lines:
-        if line == "_SPACER_":
+    for text, x_offset in wrapped_lines:
+        if text == "_SPACER_":
             y_text += font_size
             continue
-        if line == "_VERSE_SPACER_":
+        if text == "_VERSE_SPACER_":
             y_text += font_size // 2
             continue
             
-        text_color = (31, 78, 121) if line in FULL_BIBLE_BOOKS else (0, 0, 0)
+        text_color = (31, 78, 121) if text in FULL_BIBLE_BOOKS else (0, 0, 0)
         
-        # 解決字體太細：加入 stroke_width=1 加粗筆畫 (適用於支援的 Pillow 版本)
-        try:
-            draw.text((margin, y_text), line, font=font, fill=text_color, stroke_width=1)
-        except TypeError:
-            # 如果雲端 Pillow 版本不支援 stroke_width，則退回一般畫法
-            draw.text((margin, y_text), line, font=font, fill=text_color)
-            
+        # 移除 stroke_width，恢復原本扎實但不暈開的字體
+        draw.text((margin + x_offset, y_text), text, font=font, fill=text_color)
         y_text += font_size + line_spacing
         
     buffer = io.BytesIO()
@@ -438,12 +473,10 @@ if btn_start:
                         if start_v <= v <= end_v:
                             found_any = True
                             
-                            # 判斷是否換了書卷
                             if t['no'] != current_book_no:
                                 if current_book_no is not None:
                                     final_lines.append(SEPARATOR_LINE)
                                 
-                                # 只有模式 2 需要在頂部顯示完整書名
                                 if output_mode.startswith("模式 2"):
                                     full_book_name = BOOK_FULL_MAP.get(t['name'], t['name'])
                                     final_lines.append(full_book_name)
@@ -452,7 +485,6 @@ if btn_start:
                             
                             content = verse_dict[v]
                             
-                            # 根據模式決定經文前綴
                             if output_mode.startswith("模式 1"):
                                 final_lines.append(f"{t['name']} {current_ch}:{v} {content}")
                             else:
