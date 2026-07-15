@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>聖經恢復本經節整合工具 v4.0</title>
+    <title>聖經恢復本經節整合工具 v5.0</title>
     <style>
         body { font-family: "Microsoft JhengHei", Arial, sans-serif; margin: 0; padding: 0; height: 100vh; display: flex; flex-direction: column; background-color: #f9f9f9; }
         header { background: #333; color: white; padding: 15px 20px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; }
@@ -33,10 +33,12 @@
 
         /* 列表區 */
         .link-list { flex: 1; overflow-y: auto; border-top: 1px solid #eee; margin-top: 10px; }
-        .link-item { padding: 12px 10px; border-bottom: 1px solid #f0f0f0; cursor: pointer; transition: background 0.2s; display: flex; align-items: center; }
+        .link-item { padding: 12px 10px; border-bottom: 1px solid #f0f0f0; cursor: pointer; transition: background 0.2s; display: flex; align-items: center; justify-content: space-between; }
         .link-item:hover { background-color: #f0f8ff; }
         .link-item.active { background-color: #e7f1ff; border-left: 4px solid #007bff; padding-left: 6px; }
-        .link-item .ref { font-weight: bold; color: #333; font-size: 16px; }
+        .link-item .ref { font-weight: bold; color: #333; font-size: 16px; flex: 1; }
+        .link-item .open-btn { text-decoration: none; font-size: 13px; padding: 3px 6px; background: #e0e0e0; border-radius: 4px; color: #333; margin-left: 10px; transition: 0.2s; }
+        .link-item .open-btn:hover { background: #ccc; }
         
         /* 右側預覽區 */
         .preview-area { flex: 1; background: #fff; position: relative; }
@@ -48,19 +50,17 @@
 
 <header>
     <h3>恢復本經節閱讀助手</h3>
-    <small style="color: #aaa;">v4.0</small>
+    <small style="color: #aaa;">v5.0</small>
 </header>
 
 <div class="main-container">
     <div class="sidebar">
         <div class="input-area">
             <label for="inputStr">輸入經節 (逗號分隔):</label>
-            <!-- 預設填入您測試的字串 -->
             <textarea id="inputStr" placeholder="例：太五20，詩八九14...">啟一1～2，5，9～12，七9～17，十九10</textarea>
             <button onclick="processInput()">產生列表</button>
             <div id="errorMsg" class="error-msg"></div>
 
-            <!-- 使用說明區塊 -->
             <details>
                 <summary>ℹ️ 使用說明與範例</summary>
                 <div style="padding: 5px; line-height: 1.5;">
@@ -69,7 +69,7 @@
                         <li><b>同一章：</b><code>啟一1，5</code> (5 自動視為第1章的節)。</li>
                         <li><b>跨章：</b><code>七9</code> (中文數字視為新章)。</li>
                         <li><b>省略書卷：</b><code>腓三9，五21</code> (自動沿用上一卷)。</li>
-                        <li><b>修正：</b>自動將「啓」轉為「啟」。</li>
+                        <li><b>保險機制：</b>若右側無法顯示，可點擊經節旁的 <b>↗️</b> 在新分頁開啟。</li>
                     </ul>
                 </div>
             </details>
@@ -100,7 +100,6 @@
         "彼前", "彼後", "約壹", "約貳", "約參", "猶", "啟"
     ];
 
-    // 全形轉半形，並處理異體字
     function normalizeString(str) {
         let s = str.replace(/啓/g, '啟');
         return s.replace(/[\uff01-\uff5e]/g, function(ch) {
@@ -108,7 +107,6 @@
         }).replace(/\u3000/g, ' ');
     }
 
-    // 中文數字轉整數
     function cnToInt(str) {
         if (!str) return 0;
         if (/^\d+$/.test(str)) return parseInt(str);
@@ -118,7 +116,6 @@
         let s = str.replace(/[^\u4e00-\u9fa5]/g, ''); 
         if (s.length === 0) return 0;
 
-        // 數位直讀 (例如: 八九 -> 89)
         if (s.indexOf('十') === -1 && s.length > 1) {
             let numStr = "";
             for (let char of s) {
@@ -127,7 +124,6 @@
             return parseInt(numStr) || 0;
         }
 
-        // 傳統讀法
         if (s.length === 1) return map[s] || 0;
         if (s.startsWith('十')) s = '一' + s;
         
@@ -143,10 +139,9 @@
         return 0;
     }
 
-    // 全域變數 (Context)
     let lastBookNo = 0;
     let lastBookName = "";
-    let lastChapterVal = null; // 新增：記錄上一次的章數
+    let lastChapterVal = null; 
 
     function processInput() {
         let rawInput = document.getElementById('inputStr').value;
@@ -159,7 +154,6 @@
         let input = normalizeString(rawInput);
         const items = input.split(/[,，、\n]+/).map(i => i.trim()).filter(i => i);
 
-        // 重置 Context
         lastBookNo = 0;
         lastBookName = "";
         lastChapterVal = null;
@@ -185,7 +179,6 @@
         let currentBookNo = null;
         let currentBookName = "";
 
-        // 1. 辨識書卷
         for (let b of sortedBooks) {
             if (text.startsWith(b)) {
                 currentBookName = b;
@@ -195,18 +188,14 @@
             }
         }
 
-        // Context 處理
         if (currentBookNo !== null) {
-            // 有指定新書卷，更新 Context，並重置章數記憶
             lastBookNo = currentBookNo;
             lastBookName = currentBookName;
             lastChapterVal = null; 
         } else if (lastBookNo !== 0) {
-            // 沿用舊書卷
             currentBookNo = lastBookNo;
             currentBookName = lastBookName;
         } else {
-            // 無法辨識
             let div = document.createElement('div');
             div.className = 'link-item';
             div.style.color = 'red';
@@ -215,7 +204,6 @@
             return;
         }
 
-        // 2. 處理後綴
         let suffix = "";
         let suffixMatch = text.match(/([上下ab])$/i);
         if (suffixMatch) {
@@ -223,7 +211,6 @@
             text = text.substring(0, text.length - 1).trim();
         }
 
-        // 3. 處理區間
         let isRange = false;
         let rangeEnd = "";
         let rangeParts = text.split(/[~～-]/);
@@ -234,45 +221,35 @@
             rangeEnd = rangeParts[1].trim();
         }
 
-        // 4. 解析章節 (核心邏輯修正)
         let chapter = 1;
         let verse = 1;
 
-        // 格式 A: 中文緊接數字 (五20, 七9) -> 章+節
         let mixedMatch = mainPart.match(/^([一二三四五六七八九十]+)(\d+)$/);
-        
-        // 格式 B: 分隔符 (5:20)
         let splitParts = mainPart.replace(/[:：\s第章節]+/g, " ").trim().split(" ");
 
         if (mixedMatch) {
             chapter = cnToInt(mixedMatch[1]);
             verse = parseInt(mixedMatch[2]);
-            lastChapterVal = chapter; // 記憶更新
+            lastChapterVal = chapter; 
         } else if (splitParts.length >= 2) {
             chapter = cnToInt(splitParts[0]);
             verse = cnToInt(splitParts[1]);
-            lastChapterVal = chapter; // 記憶更新
+            lastChapterVal = chapter; 
         } else if (splitParts.length === 1 && splitParts[0] !== "") {
             let valStr = splitParts[0];
             let val = cnToInt(valStr);
-            
-            // === 關鍵邏輯 ===
-            // 判斷是否為純阿拉伯數字
             let isArabic = /^\d+$/.test(valStr);
             
             if (isArabic) {
                 if (lastChapterVal !== null) {
-                    // 若是阿拉伯數字且有前文 -> 視為節 (如 5)
                     chapter = lastChapterVal;
                     verse = val;
                 } else {
-                    // 若是阿拉伯數字但無前文 -> 視為章 (如 啟5 -> 第5章)
                     chapter = val;
                     verse = 1;
                     lastChapterVal = chapter;
                 }
             } else {
-                // 若是中文數字 (如 五) -> 視為章
                 chapter = val;
                 verse = 1;
                 lastChapterVal = chapter;
@@ -281,8 +258,8 @@
 
         if (chapter === 0) chapter = 1;
 
-        // 5. 產生 DOM
-        let url = `https://recoveryversion.twgbr.org/Style0A/026/read_List.php?f_BookNo=${currentBookNo}&f_ChapterNo=${chapter}&f_VerseNo=${verse}#${verse}`;
+        // 【v5.0 更新】更新為新版網址結構
+        let url = `https://recoveryversion.twgbr.org/verse/${currentBookNo}/${chapter}?verse=${verse}`;
         
         let displayText = `${currentBookName} ${chapter}:${verse}`;
         if (isRange) displayText += `-${rangeEnd}`;
@@ -290,7 +267,13 @@
 
         let div = document.createElement('div');
         div.className = 'link-item';
-        div.innerHTML = `<span class="ref">${displayText}</span>`;
+        
+        // 內部加入經節文字與「新分頁開啟」小按鈕，避免 iframe 遭到網站阻擋
+        div.innerHTML = `
+            <span class="ref">${displayText}</span>
+            <a href="${url}" target="_blank" class="open-btn" title="在新分頁開啟" onclick="event.stopPropagation();">↗️</a>
+        `;
+        
         div.onclick = function() {
             document.querySelectorAll('.link-item').forEach(el => el.classList.remove('active'));
             div.classList.add('active');
