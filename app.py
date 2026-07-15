@@ -98,12 +98,17 @@ def cn_to_int(s):
     except: return 0
     return 0
 
+# ★ 正確的網址與完整的通關密語
 def fetch_footnotes_db(book_no, chapter):
-    url = f"https://www.recoveryversion.com.tw/api/getFootnotes?chapter_code={book_no}&section_code={chapter}"
+    """直接呼叫官方正確的 getFootnotes API 取回完整的註解資料庫"""
+    url = f"https://www.recoveryversion.com.tw/api/getFootnotes?VERSION=1&chapter_code={book_no}&section_code={chapter}"
     try:
         headers = {
-            'Accept': '*/*', 
-            'User-Agent': 'Mozilla/5.0'
+            'Accept': '*/*',
+            'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Origin': 'https://recoveryversion.twgbr.org',
+            'Referer': 'https://recoveryversion.twgbr.org/',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
         }
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
@@ -116,18 +121,22 @@ def fetch_footnotes_db(book_no, chapter):
                 if v_num > 0 and content:
                     if v_num not in fn_dict:
                         fn_dict[v_num] = {}
+                    
+                    # 取代換行與官方特殊的段落底線符號 ˍ
+                    content = content.replace('<br>', ' ').replace('<br/>', ' ').replace('ˍ', ' ')
                     clean_content = re.sub(r'<[^>]+>', '', content)
                     fn_dict[v_num][str(n_num)] = clean_content
             return fn_dict
-    except:
+    except Exception as e:
         pass
     return {}
 
 def fetch_verse_dict(book_no, chapter, include_footnotes=False):
     query = f"?VERSION=1&output[]=content&output[]=unit_code&output[]=segment_code&chapter_code={book_no}&section_code={chapter}&ORDER=id"
-    url = f"https://www.recoveryversion.com.tw//api/getVerses{query}"
+    url = f"https://www.recoveryversion.com.tw/api/getVerses{query}"
     verse_dict = {}
     
+    # 若勾選，提前抓取該章節的所有註解資料庫
     fn_db = fetch_footnotes_db(book_no, chapter) if include_footnotes else {}
     
     try:
@@ -493,10 +502,7 @@ output_mode = st.radio(
     options=["模式 1：每節顯示書名簡寫 (例如：可 1:1)", "模式 2：頂部顯示完整書名 (例如：馬可福音)"],
     horizontal=True
 )
-
-# 暫時隱藏註解功能，避免使用者困惑
-# include_footnotes = st.checkbox("📖 包含註解 (經文標示出處，並將完整註解整理於頁面最下方)", value=False)
-include_footnotes = False
+include_footnotes = st.checkbox("📖 包含註解 (經文標示出處，並將完整註解整理於頁面最下方)", value=False)
 
 st.text_area("請輸入經節 (可多行或逗號分隔)", key="user_input", height=150)
 
