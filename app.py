@@ -98,10 +98,9 @@ def cn_to_int(s):
     except: return 0
     return 0
 
-# ★ 正確的網址與完整的通關密語
 def fetch_footnotes_db(book_no, chapter):
-    """直接呼叫官方正確的 getFootnotes API 取回完整的註解資料庫"""
-    url = f"https://www.recoveryversion.com.tw/api/getFootnotes?VERSION=1&chapter_code={book_no}&section_code={chapter}"
+    """直接呼叫官方正確的 getFoots API 取回完整的註解資料庫"""
+    url = f"https://www.recoveryversion.com.tw/api/getFoots?VERSION=1&chapter_code={book_no}&section_code={chapter}"
     try:
         headers = {
             'Accept': '*/*',
@@ -169,20 +168,23 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
                 paired_footnotes = []
                 
                 if include_footnotes:
-                    sups = soup.find_all('sup')
+                    # 1. 移除隱藏的 popup 區塊避免干擾經文
                     for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c):
                         popup.decompose()
                         
-                    for sup in sups:
+                    # 2. 直接從已下載的 fn_db 中，取出這節經文的「所有註解」，並確保按號碼排序！
+                    if v_num in fn_db:
+                        sorted_notes = sorted(fn_db[v_num].keys(), key=lambda x: int(x) if x.isdigit() else 0)
+                        for n_num in sorted_notes:
+                            paired_footnotes.append(f"[註{n_num}] {fn_db[v_num][n_num]}")
+                    
+                    # 3. 盡量把經文裡面的上標替換為 [1] 格式 (不影響下方註解顯示)
+                    for sup in soup.find_all('sup'):
                         marker = sup.get_text(strip=True)
                         sup.replace_with(f"[{marker}]") 
-                        
-                        fn_text = ""
-                        if v_num in fn_db and marker in fn_db[v_num]:
-                            fn_text = fn_db[v_num][marker]
-                        
-                        if fn_text:
-                            paired_footnotes.append(f"[註{marker}] {fn_text}")
+                    for a_note in soup.find_all('a', class_=lambda c: c and 'note' in c.lower()):
+                        marker = a_note.get_text(strip=True)
+                        a_note.replace_with(f"[{marker}]")
                 else:
                     for sup in soup.find_all('sup'): sup.decompose()
                     for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c): popup.decompose()
@@ -502,6 +504,7 @@ output_mode = st.radio(
     options=["模式 1：每節顯示書名簡寫 (例如：可 1:1)", "模式 2：頂部顯示完整書名 (例如：馬可福音)"],
     horizontal=True
 )
+# 解開封印：包含註解！
 include_footnotes = st.checkbox("📖 包含註解 (經文標示出處，並將完整註解整理於頁面最下方)", value=False)
 
 st.text_area("請輸入經節 (可多行或逗號分隔)", key="user_input", height=150)
