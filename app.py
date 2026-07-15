@@ -1,10 +1,12 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 from bs4 import BeautifulSoup
 import re
 import time
 import io
 import os
+import base64
 
 # --- 嘗試載入 PDF 套件 ---
 try:
@@ -48,8 +50,8 @@ BOOK_MAP = {name: i+1 for i, name in enumerate(BIBLE_BOOKS)}
 BOOK_FULL_MAP = {name: full for name, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
 SEPARATOR_LINE = "-" * 50  
 
-# --- 讀取 GitHub 內的本機字型 ---
-FONT_PATH = "NotoSansTC-Regular.ttf"
+# --- 讀取 GitHub 內的本機字型 (已更新為你的字型檔名) ---
+FONT_PATH = "NotoSansTC-VariableFont_wght.ttf"
 FONT_LOADED = False
 
 if os.path.exists(FONT_PATH) and HAS_REPORTLAB:
@@ -234,6 +236,69 @@ def generate_html(text_content):
     html_template += "</body></html>"
     return html_template
 
+# --- 產生「另開新分頁」的按鈕元件 ---
+def render_open_html_button(html_content):
+    # 將 HTML 進行 Base64 編碼，確保傳遞給 Javascript 時不會有符號衝突
+    b64_html = base64.b64encode(html_content.encode('utf-8')).decode('utf-8')
+    
+    # 用 HTML 撰寫一個外觀跟 Streamlit 一模一樣的按鈕
+    button_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <style>
+        body {{ margin: 0; padding: 0; font-family: "Source Sans Pro", sans-serif; }}
+        .btn {{
+            display: block;
+            width: 100%;
+            text-align: center;
+            padding: 0.25rem 0;
+            border-radius: 0.5rem;
+            font-size: 16px;
+            line-height: 1.6;
+            color: rgb(49, 51, 63);
+            background-color: rgb(255, 255, 255);
+            border: 1px solid rgba(49, 51, 63, 0.2);
+            text-decoration: none;
+            box-sizing: border-box;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }}
+        .btn:hover {{
+            border-color: rgb(255, 75, 75);
+            color: rgb(255, 75, 75);
+        }}
+        @media (prefers-color-scheme: dark) {{
+            .btn {{
+                color: rgb(250, 250, 250);
+                background-color: rgb(14, 17, 23);
+                border-color: rgba(250, 250, 250, 0.2);
+            }}
+        }}
+    </style>
+    </head>
+    <body>
+        <a id="newTabLink" class="btn" target="_blank">🌐 網頁版</a>
+        <script>
+            // 解碼 Base64 並產生 Blob 虛擬網址
+            const b64 = "{b64_html}";
+            const str = atob(b64);
+            const bytes = new Uint8Array(str.length);
+            for (let i = 0; i < str.length; i++) {{
+                bytes[i] = str.charCodeAt(i);
+            }}
+            const decoder = new TextDecoder('utf-8');
+            const decodedHtml = decoder.decode(bytes);
+            
+            const blob = new Blob([decodedHtml], {{type: "text/html;charset=utf-8"}});
+            document.getElementById('newTabLink').href = URL.createObjectURL(blob);
+        </script>
+    </body>
+    </html>
+    """
+    # 渲染這個按鈕 (高度調整為 45 像素，完美符合 Streamlit 按鈕高度)
+    components.html(button_html, height=45)
+
 # --- 產生 PDF ---
 def generate_pdf(text_content):
     if not HAS_REPORTLAB or not FONT_LOADED: return None
@@ -311,7 +376,7 @@ st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
 
 # 如果找不到字型檔，在網頁最上方給予提示
 if not os.path.exists(FONT_PATH):
-    st.error("⚠️ 系統找不到 `NotoSansTC-Regular.ttf`！請確認您的 GitHub 專案根目錄下有這個檔案，且檔名大小寫完全一致。")
+    st.error("⚠️ 系統找不到 `NotoSansTC-VariableFont_wght.ttf`！請確認您的 GitHub 專案根目錄下有這個檔案，且檔名大小寫完全一致。")
 
 st.title("📖 恢復本經節抓取工具")
 
@@ -385,17 +450,18 @@ if st.session_state.final_text:
     st.subheader("抓取結果")
     st.code(final_text, language="text")
     
-    st.write("### 📥 下載與匯出")
+    st.write("### 📥 下載與閱讀")
     
-    # 建立 4 欄按鈕區：文字、網頁、PDF、圖片
+    # 建立 4 欄按鈕區
     dl_col1, dl_col2, dl_col3, dl_col4 = st.columns(4)
     
     with dl_col1:
         st.download_button("📝 純文字 (.txt)", data=final_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
         
     with dl_col2:
+        # 使用我們自製的「另開分頁」元件
         html_data = generate_html(final_text)
-        st.download_button("🌐 網頁 (.html)", data=html_data, file_name="bible_verses.html", mime="text/html", use_container_width=True)
+        render_open_html_button(html_data)
     
     with dl_col3:
         if HAS_REPORTLAB and FONT_LOADED:
@@ -405,7 +471,7 @@ if st.session_state.final_text:
             else:
                 st.button("📄 PDF (錯誤)", disabled=True, use_container_width=True)
         else:
-            st.button("📄 缺字型", disabled=True, use_container_width=True, help="請確認 GitHub 根目錄有 NotoSansTC-Regular.ttf")
+            st.button("📄 缺字型", disabled=True, use_container_width=True, help="請確認 GitHub 根目錄有 NotoSansTC-VariableFont_wght.ttf")
             
     with dl_col4:
         if HAS_PIL and os.path.exists(FONT_PATH):
@@ -415,4 +481,4 @@ if st.session_state.final_text:
             else:
                 st.button("🖼️ 圖片 (錯誤)", disabled=True, use_container_width=True)
         else:
-            st.button("🖼️ 缺字型", disabled=True, use_container_width=True, help="請確認 GitHub 根目錄有 NotoSansTC-Regular.ttf")
+            st.button("🖼️ 缺字型", disabled=True, use_container_width=True, help="請確認 GitHub 根目錄有 NotoSansTC-VariableFont_wght.ttf")
