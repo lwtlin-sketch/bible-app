@@ -98,9 +98,7 @@ def cn_to_int(s):
     except: return 0
     return 0
 
-# --- 秘密武器：專抓註解的 API ---
 def fetch_footnotes_db(book_no, chapter):
-    """直接呼叫官方隱藏的 getFootnotes API 取回完整的註解資料庫"""
     url = f"https://www.recoveryversion.com.tw/api/getFootnotes?chapter_code={book_no}&section_code={chapter}"
     try:
         headers = {
@@ -111,7 +109,6 @@ def fetch_footnotes_db(book_no, chapter):
         if response.status_code == 200:
             data = response.json()
             fn_dict = {}
-            # 資料格式: {"segment_code": 1, "note_num": 1, "note_content": "..."}
             for item in data:
                 v_num = item.get("segment_code", 0)
                 n_num = item.get("note_num", 0)
@@ -119,7 +116,6 @@ def fetch_footnotes_db(book_no, chapter):
                 if v_num > 0 and content:
                     if v_num not in fn_dict:
                         fn_dict[v_num] = {}
-                    # 濾掉內容裡的特殊標籤，確保文字純淨
                     clean_content = re.sub(r'<[^>]+>', '', content)
                     fn_dict[v_num][str(n_num)] = clean_content
             return fn_dict
@@ -132,7 +128,6 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
     url = f"https://www.recoveryversion.com.tw//api/getVerses{query}"
     verse_dict = {}
     
-    # 若勾選，提前抓取該章節的所有註解字典
     fn_db = fetch_footnotes_db(book_no, chapter) if include_footnotes else {}
     
     try:
@@ -162,21 +157,17 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
             content_html = item.get('content', '')
             if v_num > 0 and content_html:
                 soup = BeautifulSoup(content_html, 'html.parser')
-                
                 paired_footnotes = []
                 
                 if include_footnotes:
                     sups = soup.find_all('sup')
-                    # 清除干擾經文閱讀的隱藏區塊 (因為我們已經有 DB 的文字了)
                     for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c):
                         popup.decompose()
                         
-                    # 從 DB 中把文字挖出來配對
                     for sup in sups:
                         marker = sup.get_text(strip=True)
-                        sup.replace_with(f"[{marker}]") # 經文加上標
+                        sup.replace_with(f"[{marker}]") 
                         
-                        # 嘗試從資料庫尋找這節這號的註解
                         fn_text = ""
                         if v_num in fn_db and marker in fn_db[v_num]:
                             fn_text = fn_db[v_num][marker]
@@ -278,16 +269,12 @@ def generate_html(text_content):
             @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
             body { font-family: 'Noto Sans TC', sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 40px 20px; }
             .book-title { color: #1F4E79; font-size: 24px; font-weight: 700; margin-top: 30px; margin-bottom: 12px; border-bottom: 2px solid #1F4E79; padding-bottom: 5px; }
-            
-            /* 經文與註解的 Flexbox 縮排對齊排版 */
             .verse, .footnote { display: flex; text-align: justify; margin-bottom: 10px; }
             .verse { font-size: 18px; }
             .verse .ref { flex-shrink: 0; margin-right: 6px; color: #B22222; font-weight: bold; }
-            
             .footnote-title { font-size: 20px; font-weight: bold; color: #1F4E79; text-align: center; margin-top: 40px; margin-bottom: 20px; }
             .footnote { font-size: 15px; color: #555; }
             .footnote .ref { flex-shrink: 0; margin-right: 8px; color: #666; font-weight: bold; }
-            
             .separator { text-align: center; margin: 25px 0; color: #ccc; letter-spacing: 5px; }
         </style>
     </head>
@@ -416,7 +403,6 @@ def generate_image(text_content):
             wrapped_lines.append(("_SPACER_", 0, False))
             continue
             
-        # 計算縮排寬度
         indent_width = 0
         match = re.match(r'^([一-龥]*\s*\d+:\d+(?:\s*｜\s*\[[^\]]+\])?\s+)', line)
         if match:
@@ -452,7 +438,6 @@ def generate_image(text_content):
                 
         wrapped_lines.append(("_VERSE_SPACER_", 0, False)) 
 
-    # 計算總高度 (註解太長也完全不怕，會自動向下延展)
     total_height = 2 * margin
     for text, _, _ in wrapped_lines:
         if text == "_SPACER_": total_height += font_size
@@ -508,7 +493,10 @@ output_mode = st.radio(
     options=["模式 1：每節顯示書名簡寫 (例如：可 1:1)", "模式 2：頂部顯示完整書名 (例如：馬可福音)"],
     horizontal=True
 )
-include_footnotes = st.checkbox("📖 包含註解 (經文標示出處，並將完整註解整理於頁面最下方)", value=False)
+
+# 暫時隱藏註解功能，避免使用者困惑
+# include_footnotes = st.checkbox("📖 包含註解 (經文標示出處，並將完整註解整理於頁面最下方)", value=False)
+include_footnotes = False
 
 st.text_area("請輸入經節 (可多行或逗號分隔)", key="user_input", height=150)
 
@@ -591,7 +579,6 @@ if st.session_state.final_text:
     st.success("🎉 抓取完成！")
     st.subheader("抓取結果")
     
-    # 改善 Streamlit 文字區塊顯示高度，避免註解太長要滑很久
     st.code(final_text, language="text")
     
     st.write("### 📥 瀏覽與匯出")
