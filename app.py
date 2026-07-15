@@ -50,17 +50,17 @@ BOOK_MAP = {name: i+1 for i, name in enumerate(BIBLE_BOOKS)}
 BOOK_FULL_MAP = {name: full for name, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
 SEPARATOR_LINE = "-" * 50  
 
-# --- 讀取 GitHub 內的本機字型 (已更新為你的字型檔名) ---
+# --- 讀取 GitHub 內的本機字型 ---
 FONT_PATH = "NotoSansTC-VariableFont_wght.ttf"
 FONT_LOADED = False
 
 if os.path.exists(FONT_PATH) and HAS_REPORTLAB:
     try:
         pdfmetrics.registerFont(TTFont('NotoSansTC', FONT_PATH))
-        addMapping('NotoSansTC', 0, 0, 'NotoSansTC') # 正常
-        addMapping('NotoSansTC', 1, 0, 'NotoSansTC') # 粗體
-        addMapping('NotoSansTC', 0, 1, 'NotoSansTC') # 斜體
-        addMapping('NotoSansTC', 1, 1, 'NotoSansTC') # 粗斜體
+        addMapping('NotoSansTC', 0, 0, 'NotoSansTC') 
+        addMapping('NotoSansTC', 1, 0, 'NotoSansTC') 
+        addMapping('NotoSansTC', 0, 1, 'NotoSansTC') 
+        addMapping('NotoSansTC', 1, 1, 'NotoSansTC') 
         FONT_LOADED = True
     except Exception:
         FONT_LOADED = False
@@ -215,11 +215,11 @@ def generate_html(text_content):
         <title>經節抓取結果</title>
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
-            body { font-family: 'Noto Sans TC', sans-serif; line-height: 1.8; color: #333; max-width: 800px; margin: 0 auto; padding: 40px 20px; }
-            .book-title { color: #1F4E79; font-size: 24px; font-weight: 700; margin-top: 30px; margin-bottom: 15px; border-bottom: 2px solid #1F4E79; padding-bottom: 5px; }
-            .verse { font-size: 18px; margin-bottom: 12px; text-align: justify; }
-            .verse strong { color: #B22222; margin-right: 8px; }
-            .separator { text-align: center; margin: 40px 0; color: #ccc; letter-spacing: 5px; }
+            body { font-family: 'Noto Sans TC', sans-serif; line-height: 1.5; color: #333; max-width: 800px; margin: 0 auto; padding: 40px 20px; }
+            .book-title { color: #1F4E79; font-size: 24px; font-weight: 700; margin-top: 30px; margin-bottom: 12px; border-bottom: 2px solid #1F4E79; padding-bottom: 5px; }
+            .verse { font-size: 18px; margin-bottom: 8px; text-align: justify; }
+            .verse strong { color: #B22222; margin-right: 6px; }
+            .separator { text-align: center; margin: 25px 0; color: #ccc; letter-spacing: 5px; }
         </style>
     </head>
     <body>
@@ -236,12 +236,10 @@ def generate_html(text_content):
     html_template += "</body></html>"
     return html_template
 
-# --- 產生「另開新分頁」的按鈕元件 ---
-def render_open_html_button(html_content):
-    # 將 HTML 進行 Base64 編碼，確保傳遞給 Javascript 時不會有符號衝突
-    b64_html = base64.b64encode(html_content.encode('utf-8')).decode('utf-8')
+# --- 產生「另開新分頁」的共用按鈕元件 ---
+def render_open_new_tab_button(data_bytes, mime_type, button_text):
+    b64_data = base64.b64encode(data_bytes).decode('utf-8')
     
-    # 用 HTML 撰寫一個外觀跟 Streamlit 一模一樣的按鈕
     button_html = f"""
     <!DOCTYPE html>
     <html>
@@ -249,54 +247,33 @@ def render_open_html_button(html_content):
     <style>
         body {{ margin: 0; padding: 0; font-family: "Source Sans Pro", sans-serif; }}
         .btn {{
-            display: block;
-            width: 100%;
-            text-align: center;
-            padding: 0.25rem 0;
-            border-radius: 0.5rem;
-            font-size: 16px;
-            line-height: 1.6;
-            color: rgb(49, 51, 63);
-            background-color: rgb(255, 255, 255);
-            border: 1px solid rgba(49, 51, 63, 0.2);
-            text-decoration: none;
-            box-sizing: border-box;
-            cursor: pointer;
-            transition: all 0.2s ease;
+            display: block; width: 100%; text-align: center; padding: 0.25rem 0;
+            border-radius: 0.5rem; font-size: 16px; line-height: 1.6;
+            color: rgb(49, 51, 63); background-color: rgb(255, 255, 255);
+            border: 1px solid rgba(49, 51, 63, 0.2); text-decoration: none;
+            box-sizing: border-box; cursor: pointer; transition: all 0.2s ease;
         }}
-        .btn:hover {{
-            border-color: rgb(255, 75, 75);
-            color: rgb(255, 75, 75);
-        }}
+        .btn:hover {{ border-color: rgb(255, 75, 75); color: rgb(255, 75, 75); }}
         @media (prefers-color-scheme: dark) {{
-            .btn {{
-                color: rgb(250, 250, 250);
-                background-color: rgb(14, 17, 23);
-                border-color: rgba(250, 250, 250, 0.2);
-            }}
+            .btn {{ color: rgb(250, 250, 250); background-color: rgb(14, 17, 23); border-color: rgba(250, 250, 250, 0.2); }}
         }}
     </style>
     </head>
     <body>
-        <a id="newTabLink" class="btn" target="_blank">🌐 網頁版</a>
+        <a id="newTabLink" class="btn" target="_blank">{button_text}</a>
         <script>
-            // 解碼 Base64 並產生 Blob 虛擬網址
-            const b64 = "{b64_html}";
+            const b64 = "{b64_data}";
             const str = atob(b64);
             const bytes = new Uint8Array(str.length);
             for (let i = 0; i < str.length; i++) {{
                 bytes[i] = str.charCodeAt(i);
             }}
-            const decoder = new TextDecoder('utf-8');
-            const decodedHtml = decoder.decode(bytes);
-            
-            const blob = new Blob([decodedHtml], {{type: "text/html;charset=utf-8"}});
+            const blob = new Blob([bytes], {{type: "{mime_type}"}});
             document.getElementById('newTabLink').href = URL.createObjectURL(blob);
         </script>
     </body>
     </html>
     """
-    # 渲染這個按鈕 (高度調整為 45 像素，完美符合 Streamlit 按鈕高度)
     components.html(button_html, height=45)
 
 # --- 產生 PDF ---
@@ -305,13 +282,13 @@ def generate_pdf(text_content):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=50, leftMargin=50, topMargin=50, bottomMargin=50)
     styles = getSampleStyleSheet()
-    verse_style = ParagraphStyle('VerseStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=14, leading=22, wordWrap='CJK')
-    title_style = ParagraphStyle('TitleStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=16, leading=24, spaceAfter=10, textColor="#1F4E79")
+    verse_style = ParagraphStyle('VerseStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=14, leading=22, spaceAfter=8, wordWrap='CJK')
+    title_style = ParagraphStyle('TitleStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=16, leading=24, spaceAfter=12, textColor="#1F4E79")
     
     story = []
     for line in text_content.split('\n'):
         line = line.strip()
-        if not line: story.append(Spacer(1, 10))
+        if not line: continue
         elif line == SEPARATOR_LINE: story.append(Spacer(1, 15))
         elif line in FULL_BIBLE_BOOKS: story.append(Paragraph(f"<b>{line}</b>", title_style))
         else: story.append(Paragraph(line, verse_style))
@@ -327,7 +304,7 @@ def generate_pdf(text_content):
 def generate_image(text_content):
     if not HAS_PIL or not os.path.exists(FONT_PATH): return None
     font_size = 22
-    line_spacing = 10
+    line_spacing = 6      
     margin = 40
     max_width = 800
     
@@ -337,8 +314,17 @@ def generate_image(text_content):
     wrapped_lines = []
     for line in text_content.split('\n'):
         line = line.strip()
+        if not line: continue
+        
+        # 處理標題與分隔線
+        if line in FULL_BIBLE_BOOKS:
+            wrapped_lines.append(line)
+            wrapped_lines.append("_SPACER_")
+            continue
         if line == SEPARATOR_LINE:
+            wrapped_lines.append("_SPACER_")
             wrapped_lines.append("-" * 35) 
+            wrapped_lines.append("_SPACER_")
             continue
             
         current_line = ""
@@ -352,18 +338,38 @@ def generate_image(text_content):
                 current_line = char
             else:
                 current_line = test_line
-        wrapped_lines.append(current_line)
-        wrapped_lines.append("")
+        if current_line:
+            wrapped_lines.append(current_line)
+        wrapped_lines.append("_VERSE_SPACER_") # 取代原本的空白行，用來做經節間距
 
-    total_height = 2 * margin + len(wrapped_lines) * (font_size + line_spacing)
+    # 計算總高度
+    total_height = 2 * margin
+    for line in wrapped_lines:
+        if line == "_SPACER_": total_height += font_size
+        elif line == "_VERSE_SPACER_": total_height += font_size // 2
+        else: total_height += font_size + line_spacing
+            
     img = Image.new('RGB', (max_width, total_height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
     
     y_text = margin
     for line in wrapped_lines:
-        if line: 
-            text_color = (31, 78, 121) if line in FULL_BIBLE_BOOKS else (0, 0, 0)
+        if line == "_SPACER_":
+            y_text += font_size
+            continue
+        if line == "_VERSE_SPACER_":
+            y_text += font_size // 2
+            continue
+            
+        text_color = (31, 78, 121) if line in FULL_BIBLE_BOOKS else (0, 0, 0)
+        
+        # 解決字體太細：加入 stroke_width=1 加粗筆畫 (適用於支援的 Pillow 版本)
+        try:
+            draw.text((margin, y_text), line, font=font, fill=text_color, stroke_width=1)
+        except TypeError:
+            # 如果雲端 Pillow 版本不支援 stroke_width，則退回一般畫法
             draw.text((margin, y_text), line, font=font, fill=text_color)
+            
         y_text += font_size + line_spacing
         
     buffer = io.BytesIO()
@@ -374,7 +380,6 @@ def generate_image(text_content):
 # --- Streamlit 介面邏輯 ---
 st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
 
-# 如果找不到字型檔，在網頁最上方給予提示
 if not os.path.exists(FONT_PATH):
     st.error("⚠️ 系統找不到 `NotoSansTC-VariableFont_wght.ttf`！請確認您的 GitHub 專案根目錄下有這個檔案，且檔名大小寫完全一致。")
 
@@ -388,6 +393,13 @@ if "final_text" not in st.session_state:
 def clear_text():
     st.session_state.user_input = ""
     st.session_state.final_text = ""
+
+# --- 輸出模式選擇 ---
+output_mode = st.radio(
+    "請選擇輸出排版模式：",
+    options=["模式 1：每節顯示書名簡寫 (例如：可 1:1)", "模式 2：頂部顯示完整書名 (例如：馬可福音)"],
+    horizontal=True
+)
 
 st.text_area("請輸入經節 (可多行或逗號分隔)", key="user_input", height=150)
 
@@ -425,15 +437,26 @@ if btn_start:
                     for v in sorted(verse_dict.keys()):
                         if start_v <= v <= end_v:
                             found_any = True
+                            
+                            # 判斷是否換了書卷
                             if t['no'] != current_book_no:
                                 if current_book_no is not None:
                                     final_lines.append(SEPARATOR_LINE)
-                                full_book_name = BOOK_FULL_MAP.get(t['name'], t['name'])
-                                final_lines.append(full_book_name)
+                                
+                                # 只有模式 2 需要在頂部顯示完整書名
+                                if output_mode.startswith("模式 2"):
+                                    full_book_name = BOOK_FULL_MAP.get(t['name'], t['name'])
+                                    final_lines.append(full_book_name)
+                                    
                                 current_book_no = t['no']
                             
                             content = verse_dict[v]
-                            final_lines.append(f"{t['name']} {current_ch}:{v} {content}")
+                            
+                            # 根據模式決定經文前綴
+                            if output_mode.startswith("模式 1"):
+                                final_lines.append(f"{t['name']} {current_ch}:{v} {content}")
+                            else:
+                                final_lines.append(f"{current_ch}:{v} {content}")
                             
                     if not found_any:
                         final_lines.append(f"[{t['name']} {current_ch}:{start_v} 無此節]")
@@ -450,35 +473,34 @@ if st.session_state.final_text:
     st.subheader("抓取結果")
     st.code(final_text, language="text")
     
-    st.write("### 📥 下載與閱讀")
+    st.write("### 📥 瀏覽與匯出")
+    st.info("💡 提示：點擊下方按鈕將開啟新分頁預覽，您可以直接在分頁中列印或儲存檔案。")
     
-    # 建立 4 欄按鈕區
     dl_col1, dl_col2, dl_col3, dl_col4 = st.columns(4)
     
     with dl_col1:
         st.download_button("📝 純文字 (.txt)", data=final_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
         
     with dl_col2:
-        # 使用我們自製的「另開分頁」元件
         html_data = generate_html(final_text)
-        render_open_html_button(html_data)
+        render_open_new_tab_button(html_data.encode('utf-8'), "text/html", "🌐 網頁版")
     
     with dl_col3:
         if HAS_REPORTLAB and FONT_LOADED:
             pdf_data = generate_pdf(final_text)
             if pdf_data:
-                st.download_button("📄 PDF", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
+                render_open_new_tab_button(pdf_data, "application/pdf", "📄 PDF版")
             else:
                 st.button("📄 PDF (錯誤)", disabled=True, use_container_width=True)
         else:
-            st.button("📄 缺字型", disabled=True, use_container_width=True, help="請確認 GitHub 根目錄有 NotoSansTC-VariableFont_wght.ttf")
+            st.button("📄 缺字型", disabled=True, use_container_width=True)
             
     with dl_col4:
         if HAS_PIL and os.path.exists(FONT_PATH):
             img_data = generate_image(final_text)
             if img_data:
-                st.download_button("🖼️ 圖片 (.png)", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True)
+                render_open_new_tab_button(img_data, "image/png", "🖼️ 圖片版")
             else:
                 st.button("🖼️ 圖片 (錯誤)", disabled=True, use_container_width=True)
         else:
-            st.button("🖼️ 缺字型", disabled=True, use_container_width=True, help="請確認 GitHub 根目錄有 NotoSansTC-VariableFont_wght.ttf")
+            st.button("🖼️ 缺字型", disabled=True, use_container_width=True)
