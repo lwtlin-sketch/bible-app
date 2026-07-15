@@ -49,6 +49,8 @@ FULL_BIBLE_BOOKS = [
 BOOK_MAP = {name: i+1 for i, name in enumerate(BIBLE_BOOKS)}
 BOOK_FULL_MAP = {name: full for name, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
 SEPARATOR_LINE = "-" * 50  
+FOOTNOTE_SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+FOOTNOTE_TITLE = "【 註 解 】"
 
 # --- 讀取 GitHub 內的本機字型 ---
 FONT_PATH = "NotoSansTC-VariableFont_wght.ttf"
@@ -96,7 +98,7 @@ def cn_to_int(s):
     except: return 0
     return 0
 
-def fetch_verse_dict(book_no, chapter):
+def fetch_verse_dict(book_no, chapter, include_footnotes=False):
     query = f"?VERSION=1&output[]=content&output[]=unit_code&output[]=segment_code&chapter_code={book_no}&section_code={chapter}&ORDER=id"
     url = f"https://www.recoveryversion.com.tw//api/getVerses{query}"
     verse_dict = {}
@@ -123,12 +125,29 @@ def fetch_verse_dict(book_no, chapter):
                 v_val = item.get('unit_code', 0)
             try: v_num = int(v_val)
             except: v_num = 0
+            
             content_html = item.get('content', '')
             if v_num > 0 and content_html:
                 soup = BeautifulSoup(content_html, 'html.parser')
-                for sup in soup.find_all('sup'): sup.decompose()
-                for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c): popup.decompose()
-                verse_dict[v_num] = soup.get_text(separator='', strip=True)
+                footnotes_list = []
+                
+                if include_footnotes:
+                    # 1. 抓取所有註解內容 (隱藏在 popup 中)
+                    for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c):
+                        fn_text = popup.get_text(separator=' ', strip=True)
+                        footnotes_list.append(fn_text)
+                        popup.decompose() # 從經文中移除隱藏區塊
+                        
+                    # 2. 將經文中的註解號碼加上括號，例如變成 [1]
+                    for sup in soup.find_all('sup'):
+                        marker = sup.get_text(strip=True)
+                        sup.replace_with(f"[{marker}]")
+                else:
+                    for sup in soup.find_all('sup'): sup.decompose()
+                    for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c): popup.decompose()
+                    
+                text = soup.get_text(separator='', strip=True)
+                verse_dict[v_num] = {'text': text, 'footnotes': footnotes_list}
         return verse_dict
     except Exception as e:
         return {"error": f"連線錯誤: {str(e)}"}
@@ -217,9 +236,14 @@ def generate_html(text_content):
             @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
             body { font-family: 'Noto Sans TC', sans-serif; line-height: 1.5; color: #333; max-width: 800px; margin: 0 auto; padding: 40px 20px; }
             .book-title { color: #1F4E79; font-size: 24px; font-weight: 700; margin-top: 30px; margin-bottom: 12px; border-bottom: 2px solid #1F4E79; padding-bottom: 5px; }
-            /* 網頁版縮排設計：利用 Flexbox 完美對齊 */
+            /* 經文與註解的 Flexbox 對齊排版 */
             .verse { display: flex; font-size: 18px; margin-bottom: 8px; text-align: justify; }
             .verse .ref { flex-shrink: 0; margin-right: 6px; color: #B22222; font-weight: bold; }
+            
+            .footnote-title { font-size: 22px; font-weight: bold; color: #1F4E79; text-align: center; margin-top: 40px; margin-bottom: 20px; }
+            .footnote { display: flex; font-size: 15px; margin-bottom: 8px; text-align: justify; color: #555; }
+            .footnote .ref { flex-shrink: 0; margin-right: 8px; color: #666; font-weight: bold; }
+            
             .separator { text-align: center; margin: 25px 0; color: #ccc; letter-spacing: 5px; }
         </style>
     </head>
@@ -229,14 +253,17 @@ def generate_html(text_content):
         line = line.strip()
         if not line: continue
         elif line == SEPARATOR_LINE: html_template += '<div class="separator">✦ ✦ ✦</div>\n'
+        elif line == FOOTNOTE_SEPARATOR: html_template += '<div class="separator">━━━━━━━━━━</div>\n'
+        elif line == FOOTNOTE_TITLE: html_template += '<div class="footnote-title">【 註 解 】</div>\n'
         elif line in FULL_BIBLE_BOOKS: html_template += f'<div class="book-title">{line}</div>\n'
         else:
-            # 正則表達式：捕捉前面的經節號碼 (例如 "可 1:1" 或 "1:1")
-            match = re.match(r'^([一-龥]*\s*\d+:\d+)\s+(.*)', line)
+            # 正則表達式：自動區分「經節號碼 (含｜)」與「經文內容」
+            match = re.match(r'^([一-龥]*\s*\d+:\d+(?:\s*｜)?)\s+(.*)', line)
             if match:
                 ref = match.group(1)
                 text = match.group(2)
-                html_template += f'<div class="verse"><span class="ref">{ref}</span><span class="text">{text}</span></div>\n'
+                css_class = "footnote" if "｜" in ref else "verse"
+                html_template += f'<div class="{css_class}"><span class="ref">{ref}</span><span class="text">{text}</span></div>\n'
             else:
                 html_template += f'<div class="verse">{line}</div>\n'
     html_template += "</body></html>"
@@ -288,18 +315,12 @@ def generate_pdf(text_content):
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=50, leftMargin=50, topMargin=50, bottomMargin=50)
     styles = getSampleStyleSheet()
     
-    # 加入首行突出 (Hanging Indent) 讓 PDF 也更美觀
-    verse_style = ParagraphStyle(
-        'VerseStyle', 
-        parent=styles['Normal'], 
-        fontName='NotoSansTC', 
-        fontSize=14, 
-        leading=22, 
-        spaceAfter=8, 
-        wordWrap='CJK',
-        leftIndent=40,       # 整體往右縮排
-        firstLineIndent=-40  # 第一行拉回來，形成凸排
-    )
+    # PDF 凸排設定
+    verse_style = ParagraphStyle('VerseStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=14, leading=22, spaceAfter=8, wordWrap='CJK', leftIndent=40, firstLineIndent=-40)
+    
+    # PDF 註解風格 (較小、淺灰)
+    footnote_style = ParagraphStyle('FootnoteStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=12, leading=18, spaceAfter=8, wordWrap='CJK', leftIndent=40, firstLineIndent=-40, textColor="#555555")
+    
     title_style = ParagraphStyle('TitleStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=16, leading=24, spaceAfter=12, textColor="#1F4E79")
     
     story = []
@@ -307,7 +328,10 @@ def generate_pdf(text_content):
         line = line.strip()
         if not line: continue
         elif line == SEPARATOR_LINE: story.append(Spacer(1, 15))
+        elif line == FOOTNOTE_SEPARATOR: story.append(Spacer(1, 20))
+        elif line == FOOTNOTE_TITLE: story.append(Paragraph(f"<b>{line}</b>", title_style))
         elif line in FULL_BIBLE_BOOKS: story.append(Paragraph(f"<b>{line}</b>", title_style))
+        elif "｜" in line: story.append(Paragraph(line, footnote_style))
         else: story.append(Paragraph(line, verse_style))
             
     try:
@@ -329,24 +353,33 @@ def generate_image(text_content):
     try: font = ImageFont.truetype(FONT_PATH, font_size)
     except Exception: return None 
 
-    wrapped_lines = [] # 儲存格式: (文字, x_縮排量)
+    wrapped_lines = [] 
     for line in text_content.split('\n'):
         line = line.strip()
         if not line: continue
         
-        if line in FULL_BIBLE_BOOKS:
-            wrapped_lines.append((line, 0))
-            wrapped_lines.append(("_SPACER_", 0))
+        is_footnote = "｜" in line
+
+        if line in [FOOTNOTE_SEPARATOR, FOOTNOTE_TITLE]:
+            wrapped_lines.append(("_SPACER_", 0, False))
+            wrapped_lines.append((line, 0, False))
+            wrapped_lines.append(("_SPACER_", 0, False))
             continue
-        if line == SEPARATOR_LINE:
-            wrapped_lines.append(("_SPACER_", 0))
-            wrapped_lines.append(("-" * 35, 0)) 
-            wrapped_lines.append(("_SPACER_", 0))
+
+        if line in FULL_BIBLE_BOOKS:
+            wrapped_lines.append((line, 0, False))
+            wrapped_lines.append(("_SPACER_", 0, False))
             continue
             
-        # 計算此節經文的「縮排寬度」(經節號碼 + 空白的長度)
+        if line == SEPARATOR_LINE:
+            wrapped_lines.append(("_SPACER_", 0, False))
+            wrapped_lines.append(("-" * 35, 0, False)) 
+            wrapped_lines.append(("_SPACER_", 0, False))
+            continue
+            
+        # 計算縮排寬度 (支援經節號碼以及註解前綴)
         indent_width = 0
-        match = re.match(r'^([一-龥]*\s*\d+:\d+\s+)', line)
+        match = re.match(r'^([一-龥]*\s*\d+:\d+(?:\s*｜)?\s+)', line)
         if match:
             prefix = match.group(1)
             try: indent_width = font.getlength(prefix)
@@ -360,31 +393,29 @@ def generate_image(text_content):
             try: text_len = font.getlength(test_line)
             except: text_len = font.getsize(test_line)[0] 
             
-            # 第一行可用寬度較大，第二行開始需扣除縮排寬度
             current_max_width = usable_width if is_first_line else (usable_width - indent_width)
             
             if text_len > current_max_width:
-                # 裝不下，換行
                 if is_first_line:
-                    wrapped_lines.append((current_line, 0))
+                    wrapped_lines.append((current_line, 0, is_footnote))
                     is_first_line = False
                 else:
-                    wrapped_lines.append((current_line, indent_width))
+                    wrapped_lines.append((current_line, indent_width, is_footnote))
                 current_line = char
             else:
                 current_line = test_line
                 
         if current_line:
             if is_first_line:
-                wrapped_lines.append((current_line, 0))
+                wrapped_lines.append((current_line, 0, is_footnote))
             else:
-                wrapped_lines.append((current_line, indent_width))
+                wrapped_lines.append((current_line, indent_width, is_footnote))
                 
-        wrapped_lines.append(("_VERSE_SPACER_", 0)) 
+        wrapped_lines.append(("_VERSE_SPACER_", 0, False)) 
 
     # 計算總高度
     total_height = 2 * margin
-    for text, _ in wrapped_lines:
+    for text, _, _ in wrapped_lines:
         if text == "_SPACER_": total_height += font_size
         elif text == "_VERSE_SPACER_": total_height += font_size // 2
         else: total_height += font_size + line_spacing
@@ -393,7 +424,7 @@ def generate_image(text_content):
     draw = ImageDraw.Draw(img)
     
     y_text = margin
-    for text, x_offset in wrapped_lines:
+    for text, x_offset, is_footnote in wrapped_lines:
         if text == "_SPACER_":
             y_text += font_size
             continue
@@ -401,9 +432,13 @@ def generate_image(text_content):
             y_text += font_size // 2
             continue
             
-        text_color = (31, 78, 121) if text in FULL_BIBLE_BOOKS else (0, 0, 0)
-        
-        # 移除 stroke_width，恢復原本扎實但不暈開的字體
+        # 標題為深藍色，註解為深灰色，正常經文為黑色
+        text_color = (0, 0, 0)
+        if text in FULL_BIBLE_BOOKS or text == FOOTNOTE_TITLE:
+            text_color = (31, 78, 121)
+        elif is_footnote:
+            text_color = (90, 90, 90) # 註解顏色
+            
         draw.text((margin + x_offset, y_text), text, font=font, fill=text_color)
         y_text += font_size + line_spacing
         
@@ -429,12 +464,13 @@ def clear_text():
     st.session_state.user_input = ""
     st.session_state.final_text = ""
 
-# --- 輸出模式選擇 ---
+# --- 輸出模式與註解選項 ---
 output_mode = st.radio(
     "請選擇輸出排版模式：",
     options=["模式 1：每節顯示書名簡寫 (例如：可 1:1)", "模式 2：頂部顯示完整書名 (例如：馬可福音)"],
     horizontal=True
 )
+include_footnotes = st.checkbox("📖 包含註解 (將統一整理顯示於頁面最下方)", value=False)
 
 st.text_area("請輸入經節 (可多行或逗號分隔)", key="user_input", height=150)
 
@@ -452,6 +488,7 @@ if btn_start:
         tasks = parse_input_string(input_text)
         
         final_lines = []
+        all_footnotes_list = [] # 儲存所有的註解
         current_book_no = None
         total_tasks = len(tasks)
         
@@ -459,7 +496,9 @@ if btn_start:
             progress_bar.progress((i + 1) / total_tasks)
             
             for current_ch in range(t['ch_start'], t['ch_end'] + 1):
-                verse_dict = fetch_verse_dict(t['no'], current_ch)
+                # 傳入 include_footnotes 參數
+                verse_dict = fetch_verse_dict(t['no'], current_ch, include_footnotes)
+                
                 if verse_dict and "error" in verse_dict:
                     st.error(f"抓取 {t['name']} {current_ch} 章時發生錯誤: {verse_dict['error']}")
                     continue
@@ -483,16 +522,28 @@ if btn_start:
                                     
                                 current_book_no = t['no']
                             
-                            content = verse_dict[v]
+                            content = verse_dict[v]['text']
                             
+                            # 組合經文
                             if output_mode.startswith("模式 1"):
                                 final_lines.append(f"{t['name']} {current_ch}:{v} {content}")
                             else:
                                 final_lines.append(f"{current_ch}:{v} {content}")
+                                
+                            # 組合註解 (收集到最後統一顯示)
+                            if include_footnotes and verse_dict[v]['footnotes']:
+                                for fn_text in verse_dict[v]['footnotes']:
+                                    all_footnotes_list.append(f"{t['name']} {current_ch}:{v} ｜ {fn_text}")
                             
                     if not found_any:
                         final_lines.append(f"[{t['name']} {current_ch}:{start_v} 無此節]")
                 time.sleep(0.1) 
+
+        # 如果有註解，統一加在最下方
+        if include_footnotes and all_footnotes_list:
+            final_lines.append(FOOTNOTE_SEPARATOR)
+            final_lines.append(FOOTNOTE_TITLE)
+            final_lines.extend(all_footnotes_list)
 
         if not final_lines:
             st.error("找不到任何經文，請檢查輸入格式。")
