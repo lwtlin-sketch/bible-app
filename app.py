@@ -49,74 +49,57 @@ def cn_to_int(s):
     return 0
 
 def fetch_verse_dict(book_no, chapter):
-    """抓取單一章節的所有經文 (v5.0 智能探測版)"""
-    url = f"https://recoveryversion.twgbr.org/verse/{book_no}/{chapter}"
+    """v7.0：使用官方隱藏 API 直接獲取資料，速度最快、最穩定"""
+    url = "https://www.recoveryversion.com.tw/api/getVerses"
+    # 根據取得的 API 結構，chapter_code = 卷，section_code = 章
+    query_string = f"?VERSION=1&output[]=content&output[]=unit_code&chapter_code={book_no}&section_code={chapter}&ORDER=id"
     verse_dict = {}
-    html_text = ""
+    
     try:
-        # 新增更真實的 Headers 防止被擋
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+            'Accept': 'application/json, text/plain, */*'
         }
-        response = requests.get(url, headers=headers, timeout=20)
-        response.encoding = 'utf-8' # 新網站預設 utf-8
-        html_text = response.text
-
-        soup = BeautifulSoup(html_text, 'html.parser')
         
-        # 移除不需要的雜訊標籤，避免抓到無關文字 (保留經文主體)
-        for tag in soup(["script", "style", "nav", "header", "footer", "sup"]):
-            tag.extract()
-            
-        # --- 萬用文字解析器 (自動適應大部分的新版網頁排版) ---
-        text_lines = soup.get_text(separator='\n').split('\n')
+        # 呼叫 API
+        response = requests.get(url + query_string, headers=headers, timeout=15)
+        response.raise_for_status() # 若連線失敗則拋出例外
+        data = response.json()
         
-        current_verse = 0
-        current_text = []
+        # API 通常回傳陣列 (List)，或是包在一個物件裡，我們動態處理
+        items = data if isinstance(data, list) else data.get('data', [])
         
-        for line in text_lines:
-            line = line.replace('\u3000', ' ').strip()
-            if not line: continue
+        # 如果 data 是一個字典且沒有 'data' 鍵，找出裡面是陣列的欄位
+        if not items and isinstance(data, dict):
+            for key in data:
+                if isinstance(data[key], list):
+                    items = data[key]
+                    break
+        
+        for item in items:
+            v_num = int(item.get('unit_code', 0)) # API 中的 'unit_code' 就是節數
+            content_html = item.get('content', '')
             
-            # 狀況 1: 節數被獨立包在一個區塊裡 (例如單獨一行 "1")
-            num_match = re.match(r'^(\d+)[.:：]?$', line)
-            
-            # 狀況 2: 節數跟經文在同一個區塊裡 (例如 "1 起初神創造天地")
-            num_text_match = re.match(r'^(\d+)[.:：]?\s+(.+)$', line)
-            
-            if num_match:
-                v = int(num_match.group(1))
-                if 1 <= v <= 200: 
-                    if current_verse > 0 and current_text:
-                        verse_dict[current_verse] = "".join(current_text)
-                    current_verse = v
-                    current_text = []
-            elif num_text_match:
-                v = int(num_text_match.group(1))
-                if 1 <= v <= 200:
-                    if current_verse > 0 and current_text:
-                        verse_dict[current_verse] = "".join(current_text)
-                    current_verse = v
-                    current_text = [num_text_match.group(2)]
-            elif current_verse > 0:
-                # 排除常見的介面按鈕雜訊
-                if line not in ["上一章", "下一章", "回首頁", "搜尋"]:
-                    current_text.append(line)
+            if v_num > 0 and content_html:
+                # 雖然是 API，但內容可能還是夾帶了註解的 HTML 標籤
+                # 透過 BeautifulSoup 把那些註解數字和多餘標籤剝除
+                soup = BeautifulSoup(content_html, 'html.parser')
                 
-        # 儲存最後一節
-        if current_verse > 0 and current_text:
-            verse_dict[current_verse] = "".join(current_text)
+                # 移除所有的 <sup> (註解數字)
+                for sup in soup.find_all('sup'):
+                    sup.decompose()
+                # 移除隱藏的彈出視窗
+                for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c):
+                    popup.decompose()
+                    
+                # 取得乾淨的純文字經文
+                clean_text = soup.get_text(separator='', strip=True)
+                verse_dict[v_num] = clean_text
+                
+        return verse_dict
 
     except Exception as e:
         return {"error": str(e)}
-
-    # --- ⚠️ 智慧除錯機制 ---
-    # 如果完全抓不到任何經文，代表網站變成純動態加載 (SPA)
-    # 把網站的原始碼回傳，在畫面上印出來，讓我來幫你寫針對性的正則表達式
-    if not verse_dict:
-        return {"debug_html": html_text[:2000]}
-        
-    return verse_dict
 
 def parse_chapter_verse(text):
     match_mixed = re.match(r'^([一二三四五六七八九十]+)(\d+)$', text)
@@ -230,13 +213,11 @@ if st.button("開始抓取"):
     if not user_input.strip():
         st.warning("請輸入內容！")
     else:
-        st.info("正在連線抓取中，因範圍較大請耐心等候...")
+        st.info("正在透過 API 高速連線抓取中，請稍候...")
         progress_bar = st.progress(0)
         tasks = parse_input_string(user_input)
         final_output_blocks = []
         total_tasks = len(tasks)
-        
-        has_error = False
         
         for i, t in enumerate(tasks):
             progress = (i + 1) / total_tasks
@@ -246,14 +227,12 @@ if st.button("開始抓取"):
             for current_ch in range(t['ch_start'], t['ch_end'] + 1):
                 verse_dict = fetch_verse_dict(t['no'], current_ch)
                 
-                # 偵測到 Debug HTML，代表新版網頁結構需要工程師介入
-                if verse_dict and "debug_html" in verse_dict:
-                    has_error = True
-                    st.error("⚠️ 抓取失敗！福音書房網站的底層結構已徹底改變。\n\n**請複製下方這個黑色框框裡面的所有文字，回傳給開發者（我），我就能立刻幫你寫出精準修正版！**")
-                    st.code(verse_dict["debug_html"], language="html")
-                    st.stop()
+                # 若發生錯誤，印出錯誤訊息幫助除錯
+                if verse_dict and "error" in verse_dict:
+                    st.error(f"抓取 {t['name']} 第 {current_ch} 章時發生錯誤: {verse_dict['error']}")
+                    continue
                 
-                if verse_dict and "error" not in verse_dict:
+                if verse_dict:
                     start_v = t['v_start'] if current_ch == t['ch_start'] else 1
                     end_v = t['v_end'] if current_ch == t['ch_end'] else 999
                     
@@ -263,22 +242,21 @@ if st.button("開始抓取"):
                             line = f"{t['name']} {current_ch}:{v} {content}"
                             task_lines.append(line)
                 
-                time.sleep(0.3) # 微調延遲避免被伺服器阻擋
+                time.sleep(0.1) # 因為是 API，延遲可以縮短，抓取更順暢
 
             if not task_lines:
                  final_output_blocks.append(f"{t['name']} {t['ch_start']}:{t['v_start']} (無法抓取或無內容)")
             else:
                 final_output_blocks.append("\n".join(task_lines))
 
-        if not has_error:
-            final_text = "\n\n".join(final_output_blocks)
-            st.success("抓取完成！")
-            st.subheader("抓取結果")
-            st.caption("請點擊下方區塊右上角的 📋 圖示即可複製全部內容")
-            st.code(final_text, language="text")
-            st.download_button(
-                label="下載為 .txt 檔案",
-                data=final_text,
-                file_name="bible_verses.txt",
-                mime="text/plain"
-            )
+        final_text = "\n\n".join(final_output_blocks)
+        st.success("🎉 抓取完成！")
+        st.subheader("抓取結果")
+        st.caption("請點擊下方區塊右上角的 📋 圖示即可複製全部內容")
+        st.code(final_text, language="text")
+        st.download_button(
+            label="下載為 .txt 檔案",
+            data=final_text,
+            file_name="bible_verses.txt",
+            mime="text/plain"
+        )
