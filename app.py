@@ -13,6 +13,7 @@ try:
     from reportlab.lib.pagesizes import A4
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.fonts import addMapping  # <--- 新增這個，用來解決 <b> 標籤崩潰
     HAS_REPORTLAB = True
 except ImportError:
     HAS_REPORTLAB = False
@@ -46,10 +47,11 @@ BOOK_MAP = {name: i+1 for i, name in enumerate(BIBLE_BOOKS)}
 BOOK_FULL_MAP = {name: full for name, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
 SEPARATOR_LINE = "-" * 50  
 
-# --- 完美中文字型處理機制 (解決 Streamlit Cloud 重新載入問題) ---
+# --- 完美中文字型處理機制 ---
+
 @st.cache_resource
-def setup_chinese_font():
-    """自動下載並回傳思源黑體的本機路徑"""
+def download_chinese_font():
+    """只負責下載字型，利用 cache 避免重複下載 (不再把註冊寫在這裡)"""
     font_filename = "NotoSansTC-Regular.ttf"
     if not os.path.exists(font_filename):
         font_url = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
@@ -61,28 +63,24 @@ def setup_chinese_font():
         except Exception as e:
             st.error(f"下載字型失敗: {str(e)}")
             return None
-    
-    # 註冊給 PDF (這段非常關鍵，解決 Bold 的崩潰問題)
-    if HAS_REPORTLAB and os.path.exists(font_filename):
-        try:
-            # 1. 註冊實體字型
-            pdfmetrics.registerFont(TTFont('NotoSansTC', font_filename))
-            # 2. 註冊字型家族 (這是唯一能讓 Streamlit Cloud 網頁上 <b> 標籤不崩潰的寫法)
-            pdfmetrics.registerFontFamily(
-                'NotoSansTC', 
-                normal='NotoSansTC', 
-                bold='NotoSansTC', 
-                italic='NotoSansTC', 
-                boldItalic='NotoSansTC'
-            )
-        except Exception:
-            pass
-            
     return font_filename
 
-FONT_PATH = setup_chinese_font()
+FONT_PATH = download_chinese_font()
 
+# 這段放在函數外面，確保 Streamlit 每次重新整理或按鈕點擊時，都會為當下的 ReportLab 環境註冊字型
+if HAS_REPORTLAB and FONT_PATH and os.path.exists(FONT_PATH):
+    try:
+        # 1. 註冊實體字型
+        pdfmetrics.registerFont(TTFont('NotoSansTC', FONT_PATH))
+        # 2. 強制設定 Mapping，告訴 ReportLab 當遇到 <b> 或 <i> 時，都直接借用原本的字型檔
+        addMapping('NotoSansTC', 0, 0, 'NotoSansTC') # Normal
+        addMapping('NotoSansTC', 1, 0, 'NotoSansTC') # Bold (粗體)
+        addMapping('NotoSansTC', 0, 1, 'NotoSansTC') # Italic (斜體)
+        addMapping('NotoSansTC', 1, 1, 'NotoSansTC') # Bold & Italic (粗斜體)
+    except Exception as e:
+        st.warning(f"ReportLab 字型註冊異常: {e}")
 
+# --- 後續的核心邏輯函式 (def normalize_string(s)...) 保持不變 ---
 # --- 核心邏輯函式 ---
 def normalize_string(s):
     s = s.replace('啓', '啟')
