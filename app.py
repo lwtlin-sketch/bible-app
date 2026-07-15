@@ -98,9 +98,10 @@ def cn_to_int(s):
     except: return 0
     return 0
 
+# ★ 修正為正確的 API：getFoots
 def fetch_footnotes_db(book_no, chapter):
-    """帶上完整的通關密語，直接去官方資料庫把該章節的註解全部挖出來"""
-    url = f"https://www.recoveryversion.com.tw//api/getFootnotes?VERSION=1&chapter_code={book_no}&section_code={chapter}"
+    """直接呼叫官方正確的 getFoots API 取回完整的註解資料庫"""
+    url = f"https://www.recoveryversion.com.tw/api/getFoots?VERSION=1&chapter_code={book_no}&section_code={chapter}"
     try:
         headers = {
             'Accept': '*/*',
@@ -120,8 +121,9 @@ def fetch_footnotes_db(book_no, chapter):
                 if v_num > 0 and content:
                     if v_num not in fn_dict:
                         fn_dict[v_num] = {}
-                    # 把換行標籤取代為空白，並清空 HTML
-                    content = content.replace('<br>', ' ').replace('<br/>', ' ')
+                    
+                    # 取代換行與官方特殊的段落底線符號 ˍ
+                    content = content.replace('<br>', ' ').replace('<br/>', ' ').replace('ˍ', ' ')
                     clean_content = re.sub(r'<[^>]+>', '', content)
                     fn_dict[v_num][str(n_num)] = clean_content
             return fn_dict
@@ -131,7 +133,7 @@ def fetch_footnotes_db(book_no, chapter):
 
 def fetch_verse_dict(book_no, chapter, include_footnotes=False):
     query = f"?VERSION=1&output[]=content&output[]=unit_code&output[]=segment_code&chapter_code={book_no}&section_code={chapter}&ORDER=id"
-    url = f"https://www.recoveryversion.com.tw//api/getVerses{query}"
+    url = f"https://www.recoveryversion.com.tw/api/getVerses{query}"
     verse_dict = {}
     
     # 若勾選，提前抓取該章節的所有註解資料庫
@@ -500,7 +502,6 @@ output_mode = st.radio(
     options=["模式 1：每節顯示書名簡寫 (例如：可 1:1)", "模式 2：頂部顯示完整書名 (例如：馬可福音)"],
     horizontal=True
 )
-# 解開註解封印！
 include_footnotes = st.checkbox("📖 包含註解 (經文標示出處，並將完整註解整理於頁面最下方)", value=False)
 
 st.text_area("請輸入經節 (可多行或逗號分隔)", key="user_input", height=150)
