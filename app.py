@@ -10,6 +10,7 @@ import os
 try:
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.lib.fonts import addMapping
     from reportlab.lib.pagesizes import A4
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -59,12 +60,18 @@ def setup_chinese_font():
                 with open(font_filename, "wb") as f:
                     f.write(r.content)
         except Exception as e:
-            st.error(f"下載字型失敗，圖片/PDF 中文可能無法正常顯示: {str(e)}")
+            st.error(f"下載字型失敗: {str(e)}")
             return None
     
     if HAS_REPORTLAB and os.path.exists(font_filename):
         try:
+            # 1. 註冊字型檔
             pdfmetrics.registerFont(TTFont('NotoSansTC', font_filename))
+            # 2. 【關鍵修復】告訴 ReportLab，不管是常規(0,0)、粗體(1,0)、斜體(0,1)，通通使用 NotoSansTC
+            addMapping('NotoSansTC', 0, 0, 'NotoSansTC') 
+            addMapping('NotoSansTC', 1, 0, 'NotoSansTC')
+            addMapping('NotoSansTC', 0, 1, 'NotoSansTC')
+            addMapping('NotoSansTC', 1, 1, 'NotoSansTC')
         except Exception:
             pass
             
@@ -227,9 +234,11 @@ def generate_pdf(text_content):
         line = line.strip()
         if not line: story.append(Spacer(1, 10))
         elif line == SEPARATOR_LINE: story.append(Spacer(1, 15))
-        # 修正：拿掉 <b> 標籤，因為思源黑體 Regular 不支援 Bold 的映射
-        elif line in FULL_BIBLE_BOOKS: story.append(Paragraph(line, title_style))
-        else: story.append(Paragraph(line, verse_style))
+        elif line in FULL_BIBLE_BOOKS: 
+            # 重新加回 <b> 標籤測試！有了 addMapping，現在可以用粗體了！
+            story.append(Paragraph(f"<b>{line}</b>", title_style))
+        else: 
+            story.append(Paragraph(line, verse_style))
             
     doc.build(story)
     buffer.seek(0)
