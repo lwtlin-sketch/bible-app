@@ -6,10 +6,10 @@ import time
 import io
 import os
 
-# 嘗試載入 PDF 與圖片套件 (用於相容性處理)
+# 嘗試載入 PDF 與圖片套件
 try:
     from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.lib.pagesizes import A4
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -44,19 +44,36 @@ FULL_BIBLE_BOOKS = [
 ]
 BOOK_MAP = {name: i+1 for i, name in enumerate(BIBLE_BOOKS)}
 BOOK_FULL_MAP = {name: full for name, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
-SEPARATOR_LINE = "-" * 50  # 加長分隔線
+SEPARATOR_LINE = "-" * 50  
 
-# --- 下載並快取中文字型 (專為網頁/圖片準備) ---
+# --- 完美中文字型處理機制 ---
 @st.cache_resource
-def get_chinese_font():
-    font_path = "NotoSansTC-Regular.ttf"
-    if not os.path.exists(font_path):
-        # 從 Google Fonts 直接下載字型，解決伺服器沒有中文字型的問題
-        url = "https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
-        r = requests.get(url)
-        with open(font_path, "wb") as f:
-            f.write(r.content)
-    return font_path
+def setup_chinese_font():
+    """自動下載並回傳思源黑體的本機路徑"""
+    font_filename = "NotoSansTC-Regular.ttf"
+    # 若本機還沒有這個字型，就從 GitHub 下載乾淨的繁體中文字型
+    if not os.path.exists(font_filename):
+        font_url = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
+        try:
+            r = requests.get(font_url, timeout=10)
+            if r.status_code == 200:
+                with open(font_filename, "wb") as f:
+                    f.write(r.content)
+        except Exception as e:
+            st.error(f"下載字型失敗，圖片/PDF 中文可能無法正常顯示: {str(e)}")
+            return None
+    
+    # 註冊字型給 ReportLab (PDF用)
+    if HAS_REPORTLAB and os.path.exists(font_filename):
+        try:
+            pdfmetrics.registerFont(TTFont('NotoSansTC', font_filename))
+        except Exception:
+            pass
+            
+    return font_filename
+
+# 在程式一開始就準備好字型
+FONT_PATH = setup_chinese_font()
 
 
 # --- 核心邏輯函式 ---
@@ -200,14 +217,14 @@ def parse_input_string(input_str):
 
 # --- PDF 產生函式 ---
 def generate_pdf(text_content):
-    if not HAS_REPORTLAB: return None
-    pdfmetrics.registerFont(UnicodeCIDFont('MSung-Light'))
+    if not HAS_REPORTLAB or not FONT_PATH: return None
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=50, leftMargin=50, topMargin=50, bottomMargin=50)
     styles = getSampleStyleSheet()
     
-    verse_style = ParagraphStyle('VerseStyle', parent=styles['Normal'], fontName='MSung-Light', fontSize=14, leading=22, wordWrap='CJK')
-    title_style = ParagraphStyle('TitleStyle', parent=styles['Normal'], fontName='MSung-Light', fontSize=16, leading=24, spaceAfter=10, textColor="#1F4E79")
+    # 這裡強制使用我們下載好的 NotoSansTC
+    verse_style = ParagraphStyle('VerseStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=14, leading=22, wordWrap='CJK')
+    title_style = ParagraphStyle('TitleStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=16, leading=24, spaceAfter=10, textColor="#1F4E79")
     
     story = []
     for line in text_content.split('\n'):
@@ -221,49 +238,48 @@ def generate_pdf(text_content):
     buffer.seek(0)
     return buffer.getvalue()
 
-# --- 圖片產生函式 (附帶自動換行與中文支援) ---
+# --- 圖片產生函式 ---
 def generate_image(text_content):
-    if not HAS_PIL: return None
-    font_path = get_chinese_font()
+    if not HAS_PIL or not FONT_PATH: return None
     font_size = 22
     line_spacing = 10
     margin = 40
     max_width = 800
     
-    try: font = ImageFont.truetype(font_path, font_size)
-    except: font = ImageFont.load_default() # 極端備用方案
+    # 強制載入下載好的思源黑體
+    try: font = ImageFont.truetype(FONT_PATH, font_size)
+    except: return None 
 
-    # 自動文字換行演算法
     wrapped_lines = []
     for line in text_content.split('\n'):
         line = line.strip()
         if line == SEPARATOR_LINE:
-            wrapped_lines.append("-" * 35) # 圖片中的虛線稍微縮短一點比較美觀
+            wrapped_lines.append("-" * 35) 
             continue
             
         current_line = ""
         for char in line:
             test_line = current_line + char
-            # 計算目前長度，若超過邊界就換行
-            if font.getlength(test_line) > (max_width - 2 * margin):
+            # Pillow 的 textlength 支援度較好
+            try: text_len = font.getlength(test_line)
+            except: text_len = font.getsize(test_line)[0] # 舊版 Pillow 相容
+            
+            if text_len > (max_width - 2 * margin):
                 wrapped_lines.append(current_line)
                 current_line = char
             else:
                 current_line = test_line
         wrapped_lines.append(current_line)
-        wrapped_lines.append("") # 段落間距
+        wrapped_lines.append("")
 
-    # 計算圖片高度
     total_height = 2 * margin + len(wrapped_lines) * (font_size + line_spacing)
     
-    # 繪製圖片
     img = Image.new('RGB', (max_width, total_height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
     
     y_text = margin
     for line in wrapped_lines:
         if line: 
-            # 如果是書卷標題，改變顏色
             text_color = (31, 78, 121) if line in FULL_BIBLE_BOOKS else (0, 0, 0)
             draw.text((margin, y_text), line, font=font, fill=text_color)
         y_text += font_size + line_spacing
@@ -277,11 +293,15 @@ def generate_image(text_content):
 st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
 st.title("📖 恢復本經節抓取工具")
 
+# 初始化 Session State (用來保存輸入框內容與最後抓取的結果，避免點按鈕後消失)
 if "user_input" not in st.session_state:
     st.session_state.user_input = "可一1~5\n創一1~3"
+if "final_text" not in st.session_state:
+    st.session_state.final_text = ""
 
 def clear_text():
     st.session_state.user_input = ""
+    st.session_state.final_text = "" # 清空時也一併清空結果區塊
 
 st.text_area("請輸入經節 (可多行或逗號分隔)", key="user_input", height=150)
 
@@ -289,6 +309,7 @@ col1, col2 = st.columns([1, 4])
 with col1: btn_start = st.button("🚀 開始抓取", type="primary")
 with col2: st.button("🗑️ 清除內容", on_click=clear_text)
 
+# 當按下開始抓取時，才執行API連線
 if btn_start:
     input_text = st.session_state.user_input
     if not input_text.strip():
@@ -336,34 +357,35 @@ if btn_start:
         if not final_lines:
             st.error("找不到任何經文，請檢查輸入格式。")
         else:
-            final_text = "\n".join(final_lines)
-            st.success("🎉 抓取完成！")
+            # 將結果存入 Session State 中！這樣點擊下載按鈕重新渲染時，結果才不會不見！
+            st.session_state.final_text = "\n".join(final_lines)
+
+# --- 顯示結果與下載按鈕區 (只要 Session 裡有資料，就會一直顯示) ---
+if st.session_state.final_text:
+    final_text = st.session_state.final_text
+    st.success("🎉 抓取完成！")
+    
+    st.subheader("抓取結果")
+    st.code(final_text, language="text")
+    
+    st.write("### 📥 下載與匯出")
+    dl_col1, dl_col2, dl_col3 = st.columns(3)
+    
+    with dl_col1:
+        st.download_button("📝 純文字 (.txt)", data=final_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
+    
+    with dl_col2:
+        if HAS_REPORTLAB and FONT_PATH:
+            pdf_data = generate_pdf(final_text)
+            if pdf_data:
+                st.download_button("📄 PDF 文件 (14號字)", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
+        else:
+            st.button("📄 PDF (字型載入失敗)", disabled=True, use_container_width=True)
             
-            st.subheader("抓取結果")
-            st.code(final_text, language="text")
-            
-            # --- 匯出按鈕區 ---
-            st.write("### 📥 下載與匯出")
-            dl_col1, dl_col2, dl_col3 = st.columns(3)
-            
-            with dl_col1:
-                st.download_button("📝 純文字 (.txt)", data=final_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
-            
-            with dl_col2:
-                if HAS_REPORTLAB:
-                    pdf_data = generate_pdf(final_text)
-                    if pdf_data:
-                        st.download_button("📄 PDF 文件 (14號字)", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
-                else:
-                    st.button("📄 PDF (未安裝套件)", disabled=True, use_container_width=True)
-                    
-            with dl_col3:
-                if HAS_PIL:
-                    img_data = generate_image(final_text)
-                    if img_data:
-                        st.download_button("🖼️ 下載為圖片 (.png)", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True)
-                else:
-                    st.button("🖼️ 圖片 (未安裝套件)", disabled=True, use_container_width=True)
-                    
-            if not HAS_REPORTLAB or not HAS_PIL:
-                st.caption("提示：如需 PDF 或圖片功能，請確認伺服器有安裝 `reportlab` 與 `Pillow` 套件。")
+    with dl_col3:
+        if HAS_PIL and FONT_PATH:
+            img_data = generate_image(final_text)
+            if img_data:
+                st.download_button("🖼️ 下載為圖片 (.png)", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True)
+        else:
+            st.button("🖼️ 圖片 (字型載入失敗)", disabled=True, use_container_width=True)
