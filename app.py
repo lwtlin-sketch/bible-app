@@ -3,6 +3,18 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import time
+import io
+
+# 嘗試載入 PDF 套件
+try:
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    HAS_REPORTLAB = True
+except ImportError:
+    HAS_REPORTLAB = False
 
 # --- 基礎設定 ---
 BIBLE_BOOKS = [
@@ -14,7 +26,17 @@ BIBLE_BOOKS = [
     "腓", "西", "帖前", "帖後", "提前", "提後", "多", "門", "來", "雅", 
     "彼前", "彼後", "約壹", "約貳", "約參", "猶", "啟"
 ]
+FULL_BIBLE_BOOKS = [
+    "創世記", "出埃及記", "利未記", "民數記", "申命記", "約書亞記", "士師記", "路得記", "撒母耳記上", "撒母耳記下", 
+    "列王紀上", "列王紀下", "歷代志上", "歷代志下", "以斯拉記", "尼希米記", "以斯帖記", "約伯記", "詩篇", "箴言", 
+    "傳道書", "雅歌", "以賽亞書", "耶利米書", "耶利米哀歌", "以西結書", "但以理書", "何西阿書", "約珥書", "阿摩司書", 
+    "俄巴底亞書", "約拿書", "彌迦書", "那鴻書", "哈巴谷書", "西番雅書", "哈該書", "撒迦利亞書", "瑪拉基書",
+    "馬太福音", "馬可福音", "路加福音", "約翰福音", "使徒行傳", "羅馬書", "哥林多前書", "哥林多後書", "加拉太書", "以弗所書", 
+    "腓立比書", "歌羅西書", "帖撒羅尼迦前書", "帖撒羅尼迦後書", "提摩太前書", "提摩太後書", "提多書", "腓利門書", "希伯來書", "雅各書", 
+    "彼得前書", "彼得後書", "約翰一書", "約翰二書", "約翰三書", "猶大書", "啟示錄"
+]
 BOOK_MAP = {name: i+1 for i, name in enumerate(BIBLE_BOOKS)}
+BOOK_FULL_MAP = {name: full for name, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
 
 # --- 核心邏輯函式 ---
 
@@ -49,16 +71,13 @@ def cn_to_int(s):
     return 0
 
 def fetch_verse_dict(book_no, chapter):
-    """v7.3：完美破解版，強制原始 [] 參數，並正確解析 segment_code 作為節數"""
-    
-    # 【關鍵修正1】強制手動組合字串，不讓 Python 自動編碼 []，並加入你紀錄中的 segment_code 與 // 雙斜線
+    """API 完美破解版 (v7.3)"""
     query = f"?VERSION=1&output[]=content&output[]=unit_code&output[]=segment_code&chapter_code={book_no}&section_code={chapter}&ORDER=id"
     url = f"https://www.recoveryversion.com.tw//api/getVerses{query}"
     
     verse_dict = {}
     
     try:
-        # 【關鍵修正2】使用你提供的確切 Origin 與 Referer
         headers = {
             'Accept': '*/*',
             'Accept-Language': 'zh-TW,zh;q=0.9',
@@ -78,35 +97,25 @@ def fetch_verse_dict(book_no, chapter):
                     items = data[key]
                     break
         
-        if not items:
-            return {"error": "伺服器回傳空資料 (IP可能遭暫時阻擋)"}
+        if not items: return {"error": "伺服器回傳空資料"}
         
         for item in items:
-            # 【關鍵修正3】優先抓取 segment_code，這才是真正的「第幾節」
             v_val = item.get('segment_code')
             if v_val is None or str(v_val).strip() == '':
                 v_val = item.get('unit_code', 0)
                 
-            try:
-                v_num = int(v_val)
-            except:
-                v_num = 0
+            try: v_num = int(v_val)
+            except: v_num = 0
                 
             content_html = item.get('content', '')
             
             if v_num > 0 and content_html:
                 soup = BeautifulSoup(content_html, 'html.parser')
-                for sup in soup.find_all('sup'):
-                    sup.decompose()
-                for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c):
-                    popup.decompose()
+                for sup in soup.find_all('sup'): sup.decompose()
+                for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c): popup.decompose()
                     
                 clean_text = soup.get_text(separator='', strip=True)
                 verse_dict[v_num] = clean_text
-                
-        # 【超級防呆】如果有抓到資料，但我們解析不到節數，直接印出第一筆資料供我們查看
-        if not verse_dict and items:
-            return {"error": f"解析節數失敗，資料結構變更為：{str(items[:1])}"}
                 
         return verse_dict
 
@@ -156,8 +165,7 @@ def parse_input_string(input_str):
         elif last_book_no is not None:
             curr_book_no = last_book_no
             curr_book_name = last_book_name
-        else:
-            continue
+        else: continue
 
         suffix = ""
         match_suffix = re.search(r'([上下ab])$', remain, re.IGNORECASE)
@@ -189,8 +197,7 @@ def parse_input_string(input_str):
                 chapter_end, verse_end = e_ch, e_v
                 last_chapter_val = chapter_end
             else:
-                if e_v > 0:
-                    chapter_end, verse_end = chapter_start, e_v
+                if e_v > 0: chapter_end, verse_end = chapter_start, e_v
 
         parsed_items.append({
             'name': curr_book_name,
@@ -204,73 +211,133 @@ def parse_input_string(input_str):
         
     return parsed_items
 
+# --- PDF 產生函式 ---
+def generate_pdf(text_content):
+    if not HAS_REPORTLAB: return None
+    
+    # 註冊繁體中文免安裝字型 (內建於 Adobe PDF 標準)
+    pdfmetrics.registerFont(UnicodeCIDFont('MSung-Light'))
+    
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=50, leftMargin=50, topMargin=50, bottomMargin=50)
+    styles = getSampleStyleSheet()
+    
+    # 設定經文樣式：14號字，自動換行
+    verse_style = ParagraphStyle(
+        'VerseStyle', parent=styles['Normal'], fontName='MSung-Light',
+        fontSize=14, leading=22, wordWrap='CJK'
+    )
+    # 設定書卷標題樣式：16號字加粗，置中或靠左
+    title_style = ParagraphStyle(
+        'TitleStyle', parent=styles['Normal'], fontName='MSung-Light',
+        fontSize=16, leading=24, spaceAfter=10, textColor="#1F4E79"
+    )
+    
+    story = []
+    lines = text_content.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            story.append(Spacer(1, 10))
+        elif line == "-----":
+            story.append(Spacer(1, 15))
+        elif line in FULL_BIBLE_BOOKS: # 若為書卷全名
+            story.append(Paragraph(f"<b>{line}</b>", title_style))
+        else: # 一般經文
+            story.append(Paragraph(line, verse_style))
+            
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 # --- Streamlit 介面邏輯 ---
 st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
 st.title("📖 恢復本經節抓取工具")
 
-with st.expander("ℹ️ 使用說明與範例 (點擊展開)"):
-    st.markdown("""
-    ### 📝 輸入格式說明
-    1. **書卷簡寫**：支援常見簡寫（如：太、林前、啟）。
-    2. **分隔符號**：請使用 **逗號 (，)** 或 **換行** 來區隔不同處經節。
-    3. **格式範例**：
-       - **一般**：`太五20` 或 `太5:20`
-       - **跨章範圍**：`太二五14~二六56` 
-    """)
+# 初始化 Session State (用來控制文字框預設與清除)
+if "user_input" not in st.session_state:
+    st.session_state.user_input = "可一1~5\n創一1~3" # 預設文字變少
 
-default_text = "太二五14~二六56，二六57~二八20，可一1~一45，二1~四34，四35~七30，七31~十12，十13~十二37"
-user_input = st.text_area("請輸入經節 (可多行或逗號分隔)", value=default_text, height=150)
+def clear_text():
+    st.session_state.user_input = ""
 
-if st.button("開始抓取"):
-    if not user_input.strip():
+st.text_area("請輸入經節 (可多行或逗號分隔)", key="user_input", height=150)
+
+# 排列兩個按鈕
+col1, col2 = st.columns([1, 4])
+with col1:
+    btn_start = st.button("🚀 開始抓取", type="primary")
+with col2:
+    st.button("🗑️ 清除內容", on_click=clear_text)
+
+if btn_start:
+    input_text = st.session_state.user_input
+    if not input_text.strip():
         st.warning("請輸入內容！")
     else:
         st.info("正在透過 API 高速連線抓取中，請稍候...")
         progress_bar = st.progress(0)
-        tasks = parse_input_string(user_input)
-        final_output_blocks = []
+        tasks = parse_input_string(input_text)
+        
+        final_lines = []
+        current_book_no = None
         total_tasks = len(tasks)
         
         for i, t in enumerate(tasks):
-            progress = (i + 1) / total_tasks
-            progress_bar.progress(progress)
-            task_lines = []
+            progress_bar.progress((i + 1) / total_tasks)
             
             for current_ch in range(t['ch_start'], t['ch_end'] + 1):
                 verse_dict = fetch_verse_dict(t['no'], current_ch)
                 
-                # 錯誤攔截：這次如果發生錯誤，會強制作為結果輸出
                 if verse_dict and "error" in verse_dict:
-                    err_msg = f"抓取 {t['name']} {current_ch} 章時發生錯誤: {verse_dict['error']}"
-                    st.error(err_msg)
-                    task_lines.append(err_msg)
+                    st.error(f"抓取 {t['name']} {current_ch} 章時發生錯誤: {verse_dict['error']}")
                     continue
                 
                 if verse_dict:
                     start_v = t['v_start'] if current_ch == t['ch_start'] else 1
                     end_v = t['v_end'] if current_ch == t['ch_end'] else 999
                     
+                    found_any = False
                     for v in sorted(verse_dict.keys()):
                         if start_v <= v <= end_v:
+                            found_any = True
+                            # 【新增功能 2】判斷是否需要印出「書卷全名」與「分隔線」
+                            if t['no'] != current_book_no:
+                                if current_book_no is not None:
+                                    final_lines.append("-----") # 不同書卷之間加上分隔線
+                                full_book_name = BOOK_FULL_MAP.get(t['name'], t['name'])
+                                final_lines.append(full_book_name) # 加上完整的書卷名稱
+                                current_book_no = t['no']
+                            
                             content = verse_dict[v]
-                            line = f"{t['name']} {current_ch}:{v} {content}"
-                            task_lines.append(line)
+                            final_lines.append(f"{t['name']} {current_ch}:{v} {content}")
+                            
+                    if not found_any:
+                        final_lines.append(f"[{t['name']} {current_ch}:{start_v} 無此節]")
                 
                 time.sleep(0.1) 
 
-            if not task_lines:
-                 final_output_blocks.append(f"{t['name']} {t['ch_start']}:{t['v_start']} (無法抓取或無內容)")
-            else:
-                final_output_blocks.append("\n".join(task_lines))
-
-        final_text = "\n\n".join(final_output_blocks)
-        st.success("🎉 抓取完成！")
-        st.subheader("抓取結果")
-        st.caption("請點擊下方區塊右上角的 📋 圖示即可複製全部內容")
-        st.code(final_text, language="text")
-        st.download_button(
-            label="下載為 .txt 檔案",
-            data=final_text,
-            file_name="bible_verses.txt",
-            mime="text/plain"
-        )
+        if not final_lines:
+            st.error("找不到任何經文，請檢查輸入格式。")
+        else:
+            final_text = "\n".join(final_lines)
+            st.success("🎉 抓取完成！")
+            
+            st.subheader("抓取結果")
+            st.code(final_text, language="text")
+            
+            # --- 匯出按鈕區 ---
+            if not HAS_REPORTLAB:
+                st.warning("⚠️ 系統未安裝 `reportlab` 套件，無法提供 PDF 下載功能。(請使用 pip install reportlab 安裝)")
+                
+            dl_col1, dl_col2 = st.columns(2)
+            with dl_col1:
+                st.download_button("📝 下載為 .txt 檔案", data=final_text, file_name="bible_verses.txt", mime="text/plain")
+            
+            with dl_col2:
+                if HAS_REPORTLAB:
+                    pdf_data = generate_pdf(final_text)
+                    if pdf_data:
+                        st.download_button("📄 下載為 14號字 PDF", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf")
