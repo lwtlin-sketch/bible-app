@@ -49,37 +49,43 @@ def cn_to_int(s):
     return 0
 
 def fetch_verse_dict(book_no, chapter):
-    """v7.1：修正 URL 編碼與補齊防爬蟲 Headers"""
+    """v7.2：完美破解版，偽裝 Origin 與 Referer，並使用標準 Params 傳遞"""
     url = "https://www.recoveryversion.com.tw/api/getVerses"
     
-    # 【關鍵修正1】手動將 output[] 編碼為 output%5B%5D，確保後端框架能解析為陣列
-    query_string = f"?VERSION=1&output%5B%5D=content&output%5B%5D=unit_code&chapter_code={book_no}&section_code={chapter}&ORDER=id"
+    # 【關鍵修正1】交給 requests 自動進行完美編碼，並補上 segment_code
+    params = {
+        'VERSION': '1',
+        'output[]': ['content', 'unit_code', 'segment_code'],
+        'chapter_code': book_no,
+        'section_code': chapter,
+        'ORDER': 'id'
+    }
+    
     verse_dict = {}
     
     try:
-        # 【關鍵修正2】補齊 Referer 與 X-Requested-With，偽裝成正常網站內的 Ajax 請求
+        # 【關鍵修正2】完美複製你的瀏覽器行為 (Origin/Referer 改為 twgbr.org)
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
-            'Referer': 'https://www.recoveryversion.com.tw/',
-            'X-Requested-With': 'XMLHttpRequest'
+            'Accept': '*/*',
+            'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Origin': 'https://recoveryversion.twgbr.org',
+            'Referer': 'https://recoveryversion.twgbr.org/',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
         }
         
-        response = requests.get(url + query_string, headers=headers, timeout=15)
+        response = requests.get(url, headers=headers, params=params, timeout=15)
         response.raise_for_status() 
         data = response.json()
         
         items = data if isinstance(data, list) else data.get('data', [])
-        
         if not items and isinstance(data, dict):
             for key in data:
                 if isinstance(data[key], list):
                     items = data[key]
                     break
         
-        # 【關鍵修正3】如果伺服器依舊回傳空資料，主動拋出錯誤供前端顯示，而不是默默失敗
         if not items:
-            return {"error": "伺服器回傳空資料 (API 參數可能遭阻擋或格式已變更)"}
+            return {"error": "伺服器回傳空資料"}
         
         for item in items:
             v_num = int(item.get('unit_code', 0)) 
@@ -226,11 +232,10 @@ if st.button("開始抓取"):
             for current_ch in range(t['ch_start'], t['ch_end'] + 1):
                 verse_dict = fetch_verse_dict(t['no'], current_ch)
                 
-                # 【關鍵修正4】清楚列出為何失敗，而不只是跳過
                 if verse_dict and "error" in verse_dict:
                     err_msg = f"抓取 {t['name']} {current_ch} 章時發生錯誤: {verse_dict['error']}"
                     st.error(err_msg)
-                    task_lines.append(f"[{t['name']} {current_ch} 章抓取失敗: {verse_dict['error']}]")
+                    task_lines.append(f"[{t['name']} {current_ch} 章抓取失敗]")
                     continue
                 
                 if verse_dict:
@@ -243,7 +248,7 @@ if st.button("開始抓取"):
                             line = f"{t['name']} {current_ch}:{v} {content}"
                             task_lines.append(line)
                 
-                time.sleep(0.1) 
+                time.sleep(0.1) # 高速連線，稍微延遲避免伺服器負載過大
 
             if not task_lines:
                  final_output_blocks.append(f"{t['name']} {t['ch_start']}:{t['v_start']} (無法抓取或無內容)")
