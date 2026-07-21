@@ -99,7 +99,7 @@ def cn_to_int(s):
     return 0
 
 def fetch_footnotes_db(book_no, chapter):
-    url = f"https://www.recoveryversion.com.tw/api/getFootnotes?VERSION=1&chapter_code={book_no}&section_code={chapter}"
+    url = f"https://www.recoveryversion.com.tw/api/getFoots?VERSION=1&chapter_code={book_no}&section_code={chapter}"
     try:
         headers = {
             'Accept': '*/*',
@@ -474,57 +474,52 @@ def generate_image(text_content):
     img.save(buffer, format="PNG")
     return buffer.getvalue()
 
-
 # --- Streamlit 介面邏輯 ---
 st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
 
 # --- 注入 CSS 放大字體，全面增進手機與平板體驗 ---
 st.markdown("""
     <style>
-    /* 1. 放大輸入框的標題文字 ("請輸入經節...") */
+    /* 1. 放大輸入框的標題文字 */
     label[data-testid="stWidgetLabel"] p {
-        font-size: 18px !important;
+        font-size: 20px !important;
         font-weight: bold !important;
         color: #1F4E79 !important;
     }
     
     /* 2. 放大輸入框內的文字 */
     div.stTextArea textarea {
-        font-size: 18px !important;
+        font-size: 20px !important;
         line-height: 1.6 !important;
         padding: 15px !important;
     }
     
-    /* 3. 放大單選按鈕 (Radio) 的選項文字與間距 */
-    div[role="radiogroup"] label {
-        font-size: 18px !important;
-        padding-top: 5px !important;
-        padding-bottom: 5px !important;
-    }
-    div[role="radiogroup"] label span {
-        font-size: 18px !important;
+    /* 3. 強制放大單選按鈕 (Radio) 裡面的深層文字 */
+    div.stRadio div[data-testid="stMarkdownContainer"] p,
+    div.stRadio div[data-testid="stMarkdownContainer"] span {
+        font-size: 20px !important;
+        line-height: 1.6 !important;
     }
     
-    /* 4. 放大勾選框 (Checkbox) 的文字與間距 */
-    label[data-testid="stCheckbox"] {
-        padding-top: 18px !important;
-        padding-bottom: 18px !important;
-    }
-    label[data-testid="stCheckbox"] span {
-        font-size: 18px !important;
+    /* 4. 強制放大核取方塊 (Checkbox) 裡面的深層文字 */
+    div.stCheckbox div[data-testid="stMarkdownContainer"] p,
+    div.stCheckbox div[data-testid="stMarkdownContainer"] span {
+        font-size: 20px !important;
+        line-height: 1.6 !important;
     }
     
-    /* 5. 放大主要按鈕字體 (開始抓取 / 清除) */
+    /* 微調核取方塊的上下間距，讓手指更好按 */
+    div.stCheckbox {
+        padding-top: 10px !important;
+        padding-bottom: 10px !important;
+    }
+    
+    /* 5. 放大主要按鈕字體 */
     div.stButton > button {
         font-size: 18px !important;
         font-weight: bold !important;
         padding: 10px 20px !important;
         height: auto !important;
-    }
-    
-    /* 6. 放大下載按鈕的字體 */
-    div[data-testid="stDownloadButton"] button {
-        font-size: 16px !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -547,10 +542,10 @@ def clear_text():
 output_mode = st.radio(
     "請選擇輸出排版模式：",
     options=["模式 1：每節顯示書名簡寫 (例如：可 1:1)", "模式 2：頂部顯示完整書名 (例如：馬可福音)"],
-    horizontal=True
+    horizontal=False # 在手機上改為垂直排列會更好點擊
 )
 
-include_footnotes = st.checkbox("📖 包含註解 (經文標示出處，並將完整註解整理於頁面最下方)", value=False)
+include_footnotes = st.checkbox("📖 包含註解 (經文標示出處，並將完整註解整理於最下方)", value=False)
 
 st.text_area("請輸入經節 (可多行或逗號分隔)", key="user_input", height=150)
 
@@ -632,9 +627,9 @@ if st.session_state.final_text:
     final_text = st.session_state.final_text
     st.success("🎉 抓取完成！")
     
-    # 限制顯示區塊的高度，避免畫面被註解拉得太長
+    # 限制顯示區塊的高度，避免註解太長要滑很久
     st.markdown(f"""
-        <div style="height: 400px; overflow-y: auto; background-color: #f0f2f6; padding: 15px; border-radius: 10px; font-family: monospace; font-size: 14px; margin-bottom: 20px;">
+        <div style="height: 400px; overflow-y: auto; background-color: #f0f2f6; padding: 15px; border-radius: 10px; font-family: monospace; font-size: 16px; line-height:1.6; margin-bottom: 20px;">
             {final_text.replace(chr(10), '<br>')}
         </div>
         """, unsafe_allow_html=True)
