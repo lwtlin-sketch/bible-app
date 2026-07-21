@@ -507,8 +507,8 @@ st.markdown("""
     
     /* 4. 放大勾選框 (Checkbox) 的文字與間距 */
     label[data-testid="stCheckbox"] {
-        padding-top: 10px !important;
-        padding-bottom: 10px !important;
+        padding-top: 18px !important;
+        padding-bottom: 18px !important;
     }
     label[data-testid="stCheckbox"] span {
         font-size: 18px !important;
