@@ -478,31 +478,53 @@ def generate_image(text_content):
 # --- Streamlit 介面邏輯 ---
 st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
 
-# --- 注入 CSS 放大字體，增進手機與平板體驗 ---
+# --- 注入 CSS 放大字體，全面增進手機與平板體驗 ---
 st.markdown("""
     <style>
-    /* 放大輸入框的文字 */
+    /* 1. 放大輸入框的標題文字 ("請輸入經節...") */
+    label[data-testid="stWidgetLabel"] p {
+        font-size: 18px !important;
+        font-weight: bold !important;
+        color: #1F4E79 !important;
+    }
+    
+    /* 2. 放大輸入框內的文字 */
     div.stTextArea textarea {
         font-size: 18px !important;
         line-height: 1.6 !important;
         padding: 15px !important;
     }
     
-    /* 加大單選按鈕 (Radio) 的間距與字體 */
-    div.row-widget.stRadio > div {
-        font-size: 16px !important;
-        gap: 15px !important;
+    /* 3. 放大單選按鈕 (Radio) 的選項文字與間距 */
+    div[role="radiogroup"] label {
+        font-size: 18px !important;
+        padding-top: 5px !important;
+        padding-bottom: 5px !important;
+    }
+    div[role="radiogroup"] label span {
+        font-size: 18px !important;
     }
     
-    /* 加大勾選框 (Checkbox) 的字體 */
-    div.stCheckbox label span {
-        font-size: 16px !important;
+    /* 4. 放大勾選框 (Checkbox) 的文字與間距 */
+    label[data-testid="stCheckbox"] {
+        padding-top: 10px !important;
+        padding-bottom: 10px !important;
+    }
+    label[data-testid="stCheckbox"] span {
+        font-size: 18px !important;
     }
     
-    /* 加大按鈕字體 */
+    /* 5. 放大主要按鈕字體 (開始抓取 / 清除) */
     div.stButton > button {
         font-size: 18px !important;
+        font-weight: bold !important;
         padding: 10px 20px !important;
+        height: auto !important;
+    }
+    
+    /* 6. 放大下載按鈕的字體 */
+    div[data-testid="stDownloadButton"] button {
+        font-size: 16px !important;
     }
     </style>
     """, unsafe_allow_html=True)
