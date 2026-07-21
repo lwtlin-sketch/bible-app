@@ -482,14 +482,14 @@ st.markdown("""
     <style>
     /* 1. 放大輸入框的標題文字 */
     label[data-testid="stWidgetLabel"] p {
-        font-size: 20px !important;
+        font-size: 18px !important;
         font-weight: bold !important;
         color: #1F4E79 !important;
     }
     
     /* 2. 放大輸入框內的文字 */
     div.stTextArea textarea {
-        font-size: 20px !important;
+        font-size: 18px !important;
         line-height: 1.6 !important;
         padding: 15px !important;
     }
@@ -497,28 +497,28 @@ st.markdown("""
     /* 3. 強制放大單選按鈕 (Radio) 裡面的深層文字 */
     div.stRadio div[data-testid="stMarkdownContainer"] p,
     div.stRadio div[data-testid="stMarkdownContainer"] span {
-        font-size: 20px !important;
+        font-size: 18px !important;
         line-height: 1.6 !important;
     }
     
     /* 4. 強制放大核取方塊 (Checkbox) 裡面的深層文字 */
     div.stCheckbox div[data-testid="stMarkdownContainer"] p,
     div.stCheckbox div[data-testid="stMarkdownContainer"] span {
-        font-size: 20px !important;
+        font-size: 18px !important;
         line-height: 1.6 !important;
     }
     
     /* 微調核取方塊的上下間距，讓手指更好按 */
     div.stCheckbox {
-        padding-top: 10px !important;
-        padding-bottom: 10px !important;
+        padding-top: 12px !important;
+        padding-bottom: 12px !important;
     }
     
     /* 5. 放大主要按鈕字體 */
     div.stButton > button {
         font-size: 18px !important;
         font-weight: bold !important;
-        padding: 10px 20px !important;
+        padding: 16px 20px !important;
         height: auto !important;
     }
     </style>
