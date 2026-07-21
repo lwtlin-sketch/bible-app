@@ -99,7 +99,6 @@ def cn_to_int(s):
     return 0
 
 def fetch_footnotes_db(book_no, chapter):
-    """直接呼叫官方正確的 getFootnotes API，帶上完整的 Header 取回註解"""
     url = f"https://www.recoveryversion.com.tw/api/getFootnotes?VERSION=1&chapter_code={book_no}&section_code={chapter}"
     try:
         headers = {
@@ -121,7 +120,6 @@ def fetch_footnotes_db(book_no, chapter):
                     if v_num not in fn_dict:
                         fn_dict[v_num] = {}
                     
-                    # 取代換行與官方特殊的段落底線符號 ˍ
                     content = content.replace('<br>', ' ').replace('<br/>', ' ').replace('ˍ', ' ')
                     clean_content = re.sub(r'<[^>]+>', '', content)
                     fn_dict[v_num][str(n_num)] = clean_content
@@ -135,7 +133,6 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
     url = f"https://www.recoveryversion.com.tw/api/getVerses{query}"
     verse_dict = {}
     
-    # 若勾選，提前抓取該章節的所有註解資料庫
     fn_db = fetch_footnotes_db(book_no, chapter) if include_footnotes else {}
     
     try:
@@ -168,17 +165,14 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
                 paired_footnotes = []
                 
                 if include_footnotes:
-                    # 1. 移除隱藏的 popup 區塊避免干擾經文
                     for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c):
                         popup.decompose()
                         
-                    # 2. 直接從已下載的 fn_db 中，取出這節經文的「所有註解」，並確保按號碼排序
                     if v_num in fn_db:
                         sorted_notes = sorted(fn_db[v_num].keys(), key=lambda x: int(x) if x.isdigit() else 0)
                         for n_num in sorted_notes:
                             paired_footnotes.append(f"[註{n_num}] {fn_db[v_num][n_num]}")
                     
-                    # 3. 把經文裡面的上標替換為 [1] 格式
                     for sup in soup.find_all('sup'):
                         marker = sup.get_text(strip=True)
                         sup.replace_with(f"[{marker}]") 
@@ -484,6 +478,35 @@ def generate_image(text_content):
 # --- Streamlit 介面邏輯 ---
 st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
 
+# --- 注入 CSS 放大字體，增進手機與平板體驗 ---
+st.markdown("""
+    <style>
+    /* 放大輸入框的文字 */
+    div.stTextArea textarea {
+        font-size: 18px !important;
+        line-height: 1.6 !important;
+        padding: 15px !important;
+    }
+    
+    /* 加大單選按鈕 (Radio) 的間距與字體 */
+    div.row-widget.stRadio > div {
+        font-size: 16px !important;
+        gap: 15px !important;
+    }
+    
+    /* 加大勾選框 (Checkbox) 的字體 */
+    div.stCheckbox label span {
+        font-size: 16px !important;
+    }
+    
+    /* 加大按鈕字體 */
+    div.stButton > button {
+        font-size: 18px !important;
+        padding: 10px 20px !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 if not os.path.exists(FONT_PATH):
     st.error("⚠️ 系統找不到 `NotoSansTC-VariableFont_wght.ttf`！請確認您的 GitHub 專案根目錄下有這個檔案，且檔名大小寫完全一致。")
 
@@ -586,9 +609,13 @@ if btn_start:
 if st.session_state.final_text:
     final_text = st.session_state.final_text
     st.success("🎉 抓取完成！")
-    st.subheader("抓取結果")
     
-    st.code(final_text, language="text")
+    # 限制顯示區塊的高度，避免畫面被註解拉得太長
+    st.markdown(f"""
+        <div style="height: 400px; overflow-y: auto; background-color: #f0f2f6; padding: 15px; border-radius: 10px; font-family: monospace; font-size: 14px; margin-bottom: 20px;">
+            {final_text.replace(chr(10), '<br>')}
+        </div>
+        """, unsafe_allow_html=True)
     
     st.write("### 📥 瀏覽與匯出")
     st.info("💡 提示：點擊下方按鈕將開啟新分頁預覽，您可以直接在分頁中列印或儲存檔案。")
