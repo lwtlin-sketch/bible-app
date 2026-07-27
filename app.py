@@ -48,7 +48,6 @@ FULL_BIBLE_BOOKS = [
 BOOK_MAP = {name: i+1 for i, name in enumerate(BIBLE_BOOKS)}
 BOOK_FULL_MAP = {name: full for name, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
 
-# 語音辨識用：依長度排序書名，優先比對全名
 ALL_BOOK_NAMES = sorted(FULL_BIBLE_BOOKS + BIBLE_BOOKS, key=len, reverse=True)
 FULL_TO_SHORT = {full: short for short, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
 
@@ -99,10 +98,8 @@ def cn_to_int(s):
     except: return 0
     return 0
 
-# ★ 升級版語音寬容解析器 ★
 def parse_input_string(input_str):
     input_str = normalize_string(input_str)
-    # 支援語音頓號、句號作為經文分隔符
     raw_items = re.split(r'[,，、。\n\t]+', input_str)
     parsed_items = []
     last_book_no, last_book_name, last_chapter_val = None, "", None
@@ -114,7 +111,6 @@ def parse_input_string(input_str):
         curr_book_no, curr_book_name = None, ""
         remain = item
         
-        # 捕捉全名與簡寫
         for b in ALL_BOOK_NAMES:
             if remain.startswith(b):
                 short_name = FULL_TO_SHORT.get(b, b)
@@ -128,17 +124,13 @@ def parse_input_string(input_str):
             curr_book_no, curr_book_name = last_book_no, last_book_name
         else: continue
 
-        # 語言清洗：消滅「第、節」，統一百分百連接符號
         remain = remain.replace('第', '').replace('節', '')
         remain = re.sub(r'[到至－—_~～-]', '~', remain)
-        
-        # 將中文數字轉為阿拉伯數字 (例如：一章一~三 -> 1章1~3)
         remain = re.sub(r'([一二三四五六七八九十百零]+)(\d+)', r'\1 \2', remain)
         remain = re.sub(r'[一二三四五六七八九十百零]+', lambda m: str(cn_to_int(m.group(0))), remain)
         
         ch_str, v_str = "", ""
         
-        # 核心錨點辨識邏輯
         if '章' in remain:
             parts = remain.split('章', 1)
             ch_str, v_str = parts[0].strip(), parts[1].strip()
@@ -166,7 +158,6 @@ def parse_input_string(input_str):
                 vs, ve = vs.strip(), ve.strip()
                 v_start = int(vs) if vs.isdigit() else 1
                 
-                # 判斷是否為跨章節 (例如：1:31~2:3)
                 if '章' in ve or ':' in ve or ' ' in ve:
                     if '章' in ve: ce_str, ve_str = ve.split('章', 1)
                     elif ':' in ve: ce_str, ve_str = ve.split(':', 1)
@@ -348,6 +339,11 @@ def render_open_new_tab_button(data_bytes, mime_type, button_text, color_theme="
             text-decoration: none; box-sizing: border-box; cursor: pointer; transition: all 0.2s ease;
         }}
         .btn:hover {{ opacity: 0.8; transform: scale(1.02); }}
+        @media (prefers-color-scheme: dark) {{
+            .btn:not([style*="rgb(255, 75, 75)"]) {{
+                color: rgb(250, 250, 250); background-color: rgb(14, 17, 23); border-color: rgba(250, 250, 250, 0.2);
+            }}
+        }}
     </style></head><body>
         <a id="newTabLink" class="btn" target="_blank">{button_text}</a>
         <script>
@@ -390,14 +386,18 @@ def generate_pdf(text_content):
 # --- Streamlit 介面邏輯 ---
 st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
 
+# --- 移除了強制顏色的 CSS，完美相容深色模式 ---
 st.markdown("""
     <style>
-    label[data-testid="stWidgetLabel"] p { font-size: 20px !important; font-weight: bold !important; color: #1F4E79 !important; }
-    /* 放大 text_input 單行輸入框 */
-    div.stTextInput input { font-size: 20px !important; line-height: 1.6 !important; padding: 15px !important; }
+    /* 放大輸入框內的文字與高度 */
+    div.stTextInput input { font-size: 20px !important; line-height: 1.6 !important; padding: 15px !important; height: 60px !important; }
+    
+    /* 放大選項 (Radio/Checkbox) 的文字 */
     div.stRadio div[data-testid="stMarkdownContainer"] p, div.stRadio div[data-testid="stMarkdownContainer"] span { font-size: 20px !important; line-height: 1.6 !important; }
     div.stCheckbox div[data-testid="stMarkdownContainer"] p, div.stCheckbox div[data-testid="stMarkdownContainer"] span { font-size: 20px !important; line-height: 1.6 !important; }
     div.stCheckbox { padding-top: 10px !important; padding-bottom: 10px !important; }
+    
+    /* 放大主要按鈕字體 */
     div.stButton > button { font-size: 20px !important; font-weight: bold !important; padding: 12px 20px !important; height: auto !important; }
     </style>
     """, unsafe_allow_html=True)
@@ -430,20 +430,23 @@ output_mode = st.radio(
 
 include_footnotes = st.checkbox("📖 包含註解 (經文標示出處，並將完整註解整理於最下方)", value=False)
 
-# ★ 變更為 st.text_input，支援虛擬鍵盤 Enter 觸發
+# 將提示文字獨立出來，放大且適應深色模式
+st.markdown("### 🎙️ 請輸入經節")
+st.markdown("*提示：支援語音輸入！唸完後直接按下手機鍵盤的 **「Enter / 搜尋」** 即可自動查詢。*")
+
 user_input = st.text_input(
-    "請用語音或鍵盤輸入經節 (唸完後按下鍵盤 Enter 即可查詢)", 
+    "", # 隱藏標題，讓畫面更清爽
     key="query", 
-    on_change=trigger_search
+    on_change=trigger_search,
+    placeholder="例如：馬可福音一章一到五節"
 )
 
 col1, col2 = st.columns([1, 4])
 with col1: btn_start = st.button("🚀 開始抓取", type="primary")
 with col2: st.button("🗑️ 清除內容", on_click=clear_text)
 
-# 判斷是否點擊按鈕，或是透過 Enter 觸發
 if btn_start or st.session_state.do_search:
-    st.session_state.do_search = False # 重置狀態
+    st.session_state.do_search = False 
     
     if not user_input.strip():
         st.warning("請輸入內容！")
@@ -459,13 +462,10 @@ if btn_start or st.session_state.do_search:
         
         for i, t in enumerate(tasks):
             progress_bar.progress((i + 1) / total_tasks)
-            
-            # 若發生跨章節等錯誤情況防呆
             if t['ch_start'] > t['ch_end']: t['ch_end'] = t['ch_start']
             
             for current_ch in range(t['ch_start'], t['ch_end'] + 1):
                 verse_dict = fetch_verse_dict(t['no'], current_ch, include_footnotes)
-                
                 if verse_dict and "error" in verse_dict:
                     st.error(f"抓取 {t['name']} {current_ch} 章時發生錯誤: {verse_dict['error']}")
                     continue
@@ -512,8 +512,7 @@ if st.session_state.final_text:
     final_text = st.session_state.final_text
     st.success("🎉 抓取完成！")
     
-    # ★ 恢復原生的 st.code 區塊 (支援深色模式切換 + 擁有原生複製按鈕)
-    # 利用 st.container 限定高度並出現捲軸，保持畫面精簡
+    # 恢復原生的 st.code 區塊 (支援深色模式切換 + 擁有原生複製按鈕)
     with st.container(height=400):
         st.code(final_text, language="text")
     
