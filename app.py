@@ -8,7 +8,7 @@ import io
 import os
 import base64
 
-# --- 嘗試載入 PDF 與圖片套件 ---
+# --- 嘗試載入 PDF 套件 ---
 try:
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
@@ -19,12 +19,6 @@ try:
     HAS_REPORTLAB = True
 except ImportError:
     HAS_REPORTLAB = False
-
-try:
-    from PIL import Image, ImageDraw, ImageFont
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
 
 # --- 基礎設定 ---
 BIBLE_BOOKS = [
@@ -48,6 +42,7 @@ FULL_BIBLE_BOOKS = [
 BOOK_MAP = {name: i+1 for i, name in enumerate(BIBLE_BOOKS)}
 BOOK_FULL_MAP = {name: full for name, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
 
+# 語音寬容解析用字典
 ALL_BOOK_NAMES = sorted(FULL_BIBLE_BOOKS + BIBLE_BOOKS, key=len, reverse=True)
 FULL_TO_SHORT = {full: short for short, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
 
@@ -55,6 +50,7 @@ SEPARATOR_LINE = "-" * 50
 FOOTNOTE_SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━━━━━━"
 FOOTNOTE_TITLE = "【 註 解 】"
 
+# --- 讀取 GitHub 內的本機字型 ---
 FONT_PATH = "NotoSansTC-VariableFont_wght.ttf"
 FONT_LOADED = False
 
@@ -71,6 +67,7 @@ if os.path.exists(FONT_PATH) and HAS_REPORTLAB:
 
 # --- 核心邏輯函式 ---
 def normalize_string(s):
+    # 修正語音辨識的常見錯字與全形空白
     s = s.replace('啓', '啟').replace('世紀', '世記')
     r = ""
     for char in s:
@@ -99,6 +96,7 @@ def cn_to_int(s):
     return 0
 
 def parse_input_string(input_str):
+    """超強語音容錯解析器"""
     input_str = normalize_string(input_str)
     raw_items = re.split(r'[,，、。\n\t]+', input_str)
     parsed_items = []
@@ -111,6 +109,7 @@ def parse_input_string(input_str):
         curr_book_no, curr_book_name = None, ""
         remain = item
         
+        # 捕捉全名與簡寫
         for b in ALL_BOOK_NAMES:
             if remain.startswith(b):
                 short_name = FULL_TO_SHORT.get(b, b)
@@ -124,13 +123,13 @@ def parse_input_string(input_str):
             curr_book_no, curr_book_name = last_book_no, last_book_name
         else: continue
 
+        # 語言清洗：消滅「第、節」，統一百分百連接符號
         remain = remain.replace('第', '').replace('節', '')
         remain = re.sub(r'[到至－—_~～-]', '~', remain)
         remain = re.sub(r'([一二三四五六七八九十百零]+)(\d+)', r'\1 \2', remain)
         remain = re.sub(r'[一二三四五六七八九十百零]+', lambda m: str(cn_to_int(m.group(0))), remain)
         
         ch_str, v_str = "", ""
-        
         if '章' in remain:
             parts = remain.split('章', 1)
             ch_str, v_str = parts[0].strip(), parts[1].strip()
@@ -179,13 +178,12 @@ def parse_input_string(input_str):
 
 # --- API 抓取函式 ---
 def fetch_footnotes_db(book_no, chapter):
+    """直接呼叫官方正確的 getFoots API 取回完整的註解資料庫"""
     url = f"https://www.recoveryversion.com.tw/api/getFoots?VERSION=1&chapter_code={book_no}&section_code={chapter}"
     try:
         headers = {
-            'Accept': '*/*',
-            'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Origin': 'https://recoveryversion.twgbr.org',
-            'Referer': 'https://recoveryversion.twgbr.org/',
+            'Accept': '*/*', 'Accept-Language': 'zh-TW,zh;q=0.9',
+            'Origin': 'https://recoveryversion.twgbr.org', 'Referer': 'https://recoveryversion.twgbr.org/',
             'User-Agent': 'Mozilla/5.0'
         }
         response = requests.get(url, headers=headers, timeout=10)
@@ -339,6 +337,7 @@ def render_open_new_tab_button(data_bytes, mime_type, button_text, color_theme="
             text-decoration: none; box-sizing: border-box; cursor: pointer; transition: all 0.2s ease;
         }}
         .btn:hover {{ opacity: 0.8; transform: scale(1.02); }}
+        /* 適應系統深淺色模式 */
         @media (prefers-color-scheme: dark) {{
             .btn:not([style*="rgb(255, 75, 75)"]) {{
                 color: rgb(250, 250, 250); background-color: rgb(14, 17, 23); border-color: rgba(250, 250, 250, 0.2);
@@ -386,13 +385,19 @@ def generate_pdf(text_content):
 # --- Streamlit 介面邏輯 ---
 st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
 
-# --- 移除了強制顏色的 CSS，完美相容深色模式 ---
+# --- 注入 CSS：全面適應深淺色，並隱藏煩人的 Press Enter 浮水印 ---
 st.markdown("""
     <style>
-    /* 放大輸入框內的文字與高度 */
+    /* 放大輸入標題，不寫死顏色，交由系統切換 */
+    label[data-testid="stWidgetLabel"] p { font-size: 20px !important; font-weight: bold !important; }
+    
+    /* 放大 text_input 單行輸入框 */
     div.stTextInput input { font-size: 20px !important; line-height: 1.6 !important; padding: 15px !important; height: 60px !important; }
     
-    /* 放大選項 (Radio/Checkbox) 的文字 */
+    /* ★ 核心殺手：隱藏 "Press Enter to apply" 的礙眼浮水印 ★ */
+    div[data-testid="InputInstructions"] { display: none !important; }
+    
+    /* 放大 Radio / Checkbox 選項文字，不寫死顏色 */
     div.stRadio div[data-testid="stMarkdownContainer"] p, div.stRadio div[data-testid="stMarkdownContainer"] span { font-size: 20px !important; line-height: 1.6 !important; }
     div.stCheckbox div[data-testid="stMarkdownContainer"] p, div.stCheckbox div[data-testid="stMarkdownContainer"] span { font-size: 20px !important; line-height: 1.6 !important; }
     div.stCheckbox { padding-top: 10px !important; padding-bottom: 10px !important; }
@@ -408,7 +413,7 @@ if not os.path.exists(FONT_PATH):
 st.title("📖 恢復本經節抓取工具")
 
 if "query" not in st.session_state:
-    st.session_state.query = "創世記一章一至三節"
+    st.session_state.query = ""
 if "final_text" not in st.session_state:
     st.session_state.final_text = ""
 if "do_search" not in st.session_state:
@@ -430,12 +435,11 @@ output_mode = st.radio(
 
 include_footnotes = st.checkbox("📖 包含註解 (經文標示出處，並將完整註解整理於最下方)", value=False)
 
-# 將提示文字獨立出來，放大且適應深色模式
-st.markdown("### 🎙️ 請輸入經節")
-st.markdown("*提示：支援語音輸入！唸完後直接按下手機鍵盤的 **「Enter / 搜尋」** 即可自動查詢。*")
+st.markdown("### 🎙️ 請用語音或鍵盤輸入經節")
+st.markdown("*提示：唸完後直接按下鍵盤的 **「Enter / 搜尋」** 即可自動查詢，不需點擊按鈕。*")
 
 user_input = st.text_input(
-    "", # 隱藏標題，讓畫面更清爽
+    "", 
     key="query", 
     on_change=trigger_search,
     placeholder="例如：馬可福音一章一到五節"
@@ -512,13 +516,14 @@ if st.session_state.final_text:
     final_text = st.session_state.final_text
     st.success("🎉 抓取完成！")
     
-    # 恢復原生的 st.code 區塊 (支援深色模式切換 + 擁有原生複製按鈕)
+    # ★ 恢復原生的 st.code 區塊，具備原生複製按鈕並完美支援深色模式
     with st.container(height=400):
         st.code(final_text, language="text")
     
     st.write("### 📥 閱讀與匯出")
-    st.info("💡 點擊【🌐 網頁/圖片版】開啟新分頁後，點擊右下角的相機按鈕即可一鍵儲存為高畫質圖片並分享至 LINE！")
+    st.info("💡 點擊【🌐 網頁/圖片版】開啟新分頁後，點擊右下角的綠色按鈕即可一鍵儲存為高畫質圖片並分享至 LINE！")
     
+    # 簡化為三個最實用的輸出按鈕
     dl_col1, dl_col2, dl_col3 = st.columns(3)
     
     with dl_col1:
