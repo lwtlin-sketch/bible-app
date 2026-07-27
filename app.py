@@ -20,13 +20,6 @@ try:
 except ImportError:
     HAS_REPORTLAB = False
 
-# --- 嘗試載入 圖片 套件 ---
-try:
-    from PIL import Image, ImageDraw, ImageFont
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
-
 # --- 基礎設定 ---
 BIBLE_BOOKS = [
     "創", "出", "利", "民", "申", "書", "士", "得", "撒上", "撒下", 
@@ -48,6 +41,11 @@ FULL_BIBLE_BOOKS = [
 ]
 BOOK_MAP = {name: i+1 for i, name in enumerate(BIBLE_BOOKS)}
 BOOK_FULL_MAP = {name: full for name, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
+
+# 用於超級寬容輸入法：比對全名與簡寫
+ALL_BOOK_NAMES = sorted(FULL_BIBLE_BOOKS + BIBLE_BOOKS, key=len, reverse=True)
+FULL_TO_SHORT = {full: short for short, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
+
 SEPARATOR_LINE = "-" * 50  
 FOOTNOTE_SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━━━━━━"
 FOOTNOTE_TITLE = "【 註 解 】"
@@ -69,12 +67,22 @@ if os.path.exists(FONT_PATH) and HAS_REPORTLAB:
 
 # --- 核心邏輯函式 ---
 def normalize_string(s):
+    # 專為「語音輸入」與「手殘黨」設計的超級容錯轉換
     s = s.replace('啓', '啟')
+    s = s.replace('世紀', '世記') # 修正最常見的錯字：創世紀 -> 創世記
+    s = s.replace('章', ':')
+    s = s.replace('節', '')
+    s = s.replace('到', '~')
+    s = s.replace('至', '~')
+    s = s.replace('－', '~')
+    s = s.replace('-', '~')
+    s = s.replace('—', '~')
+    
     r = ""
     for char in s:
         code = ord(char)
-        if code == 12288: code = 32
-        elif 65281 <= code <= 65374: code -= 65248
+        if code == 12288: code = 32 # 全形空白轉半形
+        elif 65281 <= code <= 65374: code -= 65248 # 全形符號轉半形
         r += chr(code)
     return r.strip()
 
@@ -99,6 +107,7 @@ def cn_to_int(s):
     return 0
 
 def fetch_footnotes_db(book_no, chapter):
+    """直接呼叫官方正確的 getFoots API 取回完整的註解資料庫"""
     url = f"https://www.recoveryversion.com.tw/api/getFoots?VERSION=1&chapter_code={book_no}&section_code={chapter}"
     try:
         headers = {
@@ -106,7 +115,7 @@ def fetch_footnotes_db(book_no, chapter):
             'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
             'Origin': 'https://recoveryversion.twgbr.org',
             'Referer': 'https://recoveryversion.twgbr.org/',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0'
         }
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
@@ -119,12 +128,11 @@ def fetch_footnotes_db(book_no, chapter):
                 if v_num > 0 and content:
                     if v_num not in fn_dict:
                         fn_dict[v_num] = {}
-                    
                     content = content.replace('<br>', ' ').replace('<br/>', ' ').replace('ˍ', ' ')
                     clean_content = re.sub(r'<[^>]+>', '', content)
                     fn_dict[v_num][str(n_num)] = clean_content
             return fn_dict
-    except Exception as e:
+    except:
         pass
     return {}
 
@@ -205,16 +213,18 @@ def parse_input_string(input_str):
     raw_items = re.split(r'[,，、\n]+', input_str)
     parsed_items = []
     last_book_no, last_book_name, last_chapter_val = None, "", None
-    sorted_books = sorted(BIBLE_BOOKS, key=len, reverse=True)
     
     for item in raw_items:
         item = item.strip()
         if not item: continue
         curr_book_no, curr_book_name = None, ""
         remain = item
-        for b in sorted_books:
+        
+        # 支援全名與簡寫的超級比對
+        for b in ALL_BOOK_NAMES:
             if remain.startswith(b):
-                curr_book_name, curr_book_no = b, BOOK_MAP[b]
+                short_name = FULL_TO_SHORT.get(b, b)
+                curr_book_name, curr_book_no = short_name, BOOK_MAP[short_name]
                 remain = remain[len(b):].strip()
                 break
         
@@ -261,7 +271,7 @@ def parse_input_string(input_str):
         })
     return parsed_items
 
-# --- 產生 網頁 (HTML) ---
+# --- 產生 網頁 (HTML) 包含一鍵儲存為圖片黑科技 ---
 def generate_html(text_content):
     html_template = """
     <!DOCTYPE html>
@@ -270,9 +280,11 @@ def generate_html(text_content):
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>經節抓取結果</title>
+        <!-- 載入 html2canvas 套件 -->
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
-            body { font-family: 'Noto Sans TC', sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 40px 20px; }
+            body { font-family: 'Noto Sans TC', sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 40px 20px 100px 20px; background-color: #ffffff; }
             .book-title { color: #1F4E79; font-size: 24px; font-weight: 700; margin-top: 30px; margin-bottom: 12px; border-bottom: 2px solid #1F4E79; padding-bottom: 5px; }
             .verse, .footnote { display: flex; text-align: justify; margin-bottom: 10px; }
             .verse { font-size: 18px; }
@@ -281,9 +293,21 @@ def generate_html(text_content):
             .footnote { font-size: 15px; color: #555; }
             .footnote .ref { flex-shrink: 0; margin-right: 8px; color: #666; font-weight: bold; }
             .separator { text-align: center; margin: 25px 0; color: #ccc; letter-spacing: 5px; }
+            
+            /* 浮動截圖按鈕 (固定在右下角) */
+            #capture-btn {
+                position: fixed; bottom: 30px; right: 30px; background-color: #00c300; color: white;
+                border: none; border-radius: 50px; padding: 15px 25px; font-size: 18px; font-weight: bold;
+                box-shadow: 0 4px 10px rgba(0,0,0,0.3); cursor: pointer; z-index: 1000; transition: all 0.2s;
+            }
+            #capture-btn:hover { background-color: #00a000; transform: scale(1.05); }
+            /* 拍照時隱藏特定元素 */
+            .hide-on-capture { display: none !important; }
         </style>
     </head>
     <body>
+        <button id="capture-btn" onclick="takeScreenshot()">📸 儲存為圖片 (分享至 LINE)</button>
+        <div id="capture-area">
     """
     for line in text_content.split('\n'):
         line = line.strip()
@@ -301,12 +325,49 @@ def generate_html(text_content):
                 html_template += f'<div class="{css_class}"><span class="ref">{ref}</span><span class="text">{text}</span></div>\n'
             else:
                 html_template += f'<div class="verse">{line}</div>\n'
-    html_template += "</body></html>"
+    
+    html_template += """
+        </div>
+        <script>
+            function takeScreenshot() {
+                const btn = document.getElementById('capture-btn');
+                const originalText = btn.innerText;
+                btn.innerText = "⏳ 圖片處理中...";
+                btn.style.backgroundColor = "#999";
+                btn.classList.add('hide-on-capture'); // 截圖時不拍到按鈕
+                
+                // 給瀏覽器一點時間更新 UI
+                setTimeout(() => {
+                    html2canvas(document.body, {
+                        scale: 2, // 提高解析度
+                        useCORS: true, 
+                        backgroundColor: "#ffffff"
+                    }).then(canvas => {
+                        let link = document.createElement('a');
+                        link.download = 'bible_verses_share.png';
+                        link.href = canvas.toDataURL('image/png');
+                        link.click(); // 自動觸發下載
+                        
+                        // 恢復按鈕
+                        btn.classList.remove('hide-on-capture');
+                        btn.innerText = originalText;
+                        btn.style.backgroundColor = "#00c300";
+                    });
+                }, 300);
+            }
+        </script>
+    </body>
+    </html>
+    """
     return html_template
 
 # --- 產生「另開新分頁」的共用按鈕元件 ---
-def render_open_new_tab_button(data_bytes, mime_type, button_text):
+def render_open_new_tab_button(data_bytes, mime_type, button_text, color_theme="default"):
     b64_data = base64.b64encode(data_bytes).decode('utf-8')
+    bg_color = "rgb(255, 75, 75)" if color_theme == "primary" else "rgb(255, 255, 255)"
+    text_color = "white" if color_theme == "primary" else "rgb(49, 51, 63)"
+    border = "none" if color_theme == "primary" else "1px solid rgba(49, 51, 63, 0.2)"
+    
     button_html = f"""
     <!DOCTYPE html>
     <html>
@@ -314,16 +375,12 @@ def render_open_new_tab_button(data_bytes, mime_type, button_text):
     <style>
         body {{ margin: 0; padding: 0; font-family: "Source Sans Pro", sans-serif; }}
         .btn {{
-            display: block; width: 100%; text-align: center; padding: 0.25rem 0;
-            border-radius: 0.5rem; font-size: 16px; line-height: 1.6;
-            color: rgb(49, 51, 63); background-color: rgb(255, 255, 255);
-            border: 1px solid rgba(49, 51, 63, 0.2); text-decoration: none;
-            box-sizing: border-box; cursor: pointer; transition: all 0.2s ease;
+            display: block; width: 100%; text-align: center; padding: 0.5rem 0;
+            border-radius: 0.5rem; font-size: 18px; font-weight: bold; line-height: 1.6;
+            color: {text_color}; background-color: {bg_color}; border: {border}; 
+            text-decoration: none; box-sizing: border-box; cursor: pointer; transition: all 0.2s ease;
         }}
-        .btn:hover {{ border-color: rgb(255, 75, 75); color: rgb(255, 75, 75); }}
-        @media (prefers-color-scheme: dark) {{
-            .btn {{ color: rgb(250, 250, 250); background-color: rgb(14, 17, 23); border-color: rgba(250, 250, 250, 0.2); }}
-        }}
+        .btn:hover {{ opacity: 0.8; transform: scale(1.02); }}
     </style>
     </head>
     <body>
@@ -341,7 +398,7 @@ def render_open_new_tab_button(data_bytes, mime_type, button_text):
     </body>
     </html>
     """
-    components.html(button_html, height=45)
+    components.html(button_html, height=55)
 
 # --- 產生 PDF ---
 def generate_pdf(text_content):
@@ -372,107 +429,6 @@ def generate_pdf(text_content):
     except Exception:
         return None
 
-# --- 產生 圖片 (PNG) ---
-def generate_image(text_content):
-    if not HAS_PIL or not os.path.exists(FONT_PATH): return None
-    font_size = 22
-    line_spacing = 6      
-    margin = 40
-    max_width = 800
-    usable_width = max_width - 2 * margin
-    
-    try: font = ImageFont.truetype(FONT_PATH, font_size)
-    except Exception: return None 
-
-    wrapped_lines = [] 
-    for line in text_content.split('\n'):
-        line = line.strip()
-        if not line: continue
-        
-        is_footnote = "｜" in line
-
-        if line in [FOOTNOTE_SEPARATOR, FOOTNOTE_TITLE]:
-            wrapped_lines.append(("_SPACER_", 0, False))
-            wrapped_lines.append((line, 0, False))
-            wrapped_lines.append(("_SPACER_", 0, False))
-            continue
-
-        if line in FULL_BIBLE_BOOKS:
-            wrapped_lines.append((line, 0, False))
-            wrapped_lines.append(("_SPACER_", 0, False))
-            continue
-            
-        if line == SEPARATOR_LINE:
-            wrapped_lines.append(("_SPACER_", 0, False))
-            wrapped_lines.append(("-" * 35, 0, False)) 
-            wrapped_lines.append(("_SPACER_", 0, False))
-            continue
-            
-        indent_width = 0
-        match = re.match(r'^([一-龥]*\s*\d+:\d+(?:\s*｜\s*\[[^\]]+\])?\s+)', line)
-        if match:
-            prefix = match.group(1)
-            try: indent_width = font.getlength(prefix)
-            except: indent_width = font.getsize(prefix)[0]
-
-        current_line = ""
-        is_first_line = True
-        
-        for char in line:
-            test_line = current_line + char
-            try: text_len = font.getlength(test_line)
-            except: text_len = font.getsize(test_line)[0] 
-            
-            current_max_width = usable_width if is_first_line else (usable_width - indent_width)
-            
-            if text_len > current_max_width:
-                if is_first_line:
-                    wrapped_lines.append((current_line, 0, is_footnote))
-                    is_first_line = False
-                else:
-                    wrapped_lines.append((current_line, indent_width, is_footnote))
-                current_line = char
-            else:
-                current_line = test_line
-                
-        if current_line:
-            if is_first_line:
-                wrapped_lines.append((current_line, 0, is_footnote))
-            else:
-                wrapped_lines.append((current_line, indent_width, is_footnote))
-                
-        wrapped_lines.append(("_VERSE_SPACER_", 0, False)) 
-
-    total_height = 2 * margin
-    for text, _, _ in wrapped_lines:
-        if text == "_SPACER_": total_height += font_size
-        elif text == "_VERSE_SPACER_": total_height += font_size // 2
-        else: total_height += font_size + line_spacing
-            
-    img = Image.new('RGB', (max_width, total_height), color=(255, 255, 255))
-    draw = ImageDraw.Draw(img)
-    
-    y_text = margin
-    for text, x_offset, is_footnote in wrapped_lines:
-        if text == "_SPACER_":
-            y_text += font_size
-            continue
-        if text == "_VERSE_SPACER_":
-            y_text += font_size // 2
-            continue
-            
-        text_color = (0, 0, 0)
-        if text in FULL_BIBLE_BOOKS or text == FOOTNOTE_TITLE:
-            text_color = (31, 78, 121)
-        elif is_footnote:
-            text_color = (90, 90, 90) 
-            
-        draw.text((margin + x_offset, y_text), text, font=font, fill=text_color)
-        y_text += font_size + line_spacing
-        
-    buffer = io.BytesIO()
-    img.save(buffer, format="PNG")
-    return buffer.getvalue()
 
 # --- Streamlit 介面邏輯 ---
 st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
@@ -480,57 +436,22 @@ st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
 # --- 注入 CSS 放大字體，全面增進手機與平板體驗 ---
 st.markdown("""
     <style>
-    /* 1. 放大輸入框的標題文字 */
-    label[data-testid="stWidgetLabel"] p {
-        font-size: 18px !important;
-        font-weight: bold !important;
-        color: #1F4E79 !important;
-    }
-    
-    /* 2. 放大輸入框內的文字 */
-    div.stTextArea textarea {
-        font-size: 18px !important;
-        line-height: 1.6 !important;
-        padding: 15px !important;
-    }
-    
-    /* 3. 強制放大單選按鈕 (Radio) 裡面的深層文字 */
-    div.stRadio div[data-testid="stMarkdownContainer"] p,
-    div.stRadio div[data-testid="stMarkdownContainer"] span {
-        font-size: 18px !important;
-        line-height: 1.6 !important;
-    }
-    
-    /* 4. 強制放大核取方塊 (Checkbox) 裡面的深層文字 */
-    div.stCheckbox div[data-testid="stMarkdownContainer"] p,
-    div.stCheckbox div[data-testid="stMarkdownContainer"] span {
-        font-size: 18px !important;
-        line-height: 1.6 !important;
-    }
-    
-    /* 微調核取方塊的上下間距，讓手指更好按 */
-    div.stCheckbox {
-        padding-top: 12px !important;
-        padding-bottom: 12px !important;
-    }
-    
-    /* 5. 放大主要按鈕字體 */
-    div.stButton > button {
-        font-size: 18px !important;
-        font-weight: bold !important;
-        padding: 16px 20px !important;
-        height: auto !important;
-    }
+    label[data-testid="stWidgetLabel"] p { font-size: 20px !important; font-weight: bold !important; color: #1F4E79 !important; }
+    div.stTextArea textarea { font-size: 20px !important; line-height: 1.6 !important; padding: 15px !important; }
+    div.stRadio div[data-testid="stMarkdownContainer"] p, div.stRadio div[data-testid="stMarkdownContainer"] span { font-size: 20px !important; line-height: 1.6 !important; }
+    div.stCheckbox div[data-testid="stMarkdownContainer"] p, div.stCheckbox div[data-testid="stMarkdownContainer"] span { font-size: 20px !important; line-height: 1.6 !important; }
+    div.stCheckbox { padding-top: 10px !important; padding-bottom: 10px !important; }
+    div.stButton > button { font-size: 20px !important; font-weight: bold !important; padding: 12px 20px !important; height: auto !important; }
     </style>
     """, unsafe_allow_html=True)
 
 if not os.path.exists(FONT_PATH):
-    st.error("⚠️ 系統找不到 `NotoSansTC-VariableFont_wght.ttf`！請確認您的 GitHub 專案根目錄下有這個檔案，且檔名大小寫完全一致。")
+    st.error("⚠️ 系統找不到 `NotoSansTC-VariableFont_wght.ttf`！請確認您的 GitHub 專案根目錄下有這個檔案。")
 
 st.title("📖 恢復本經節抓取工具")
 
 if "user_input" not in st.session_state:
-    st.session_state.user_input = "可一1~5\n創一1~3"
+    st.session_state.user_input = "馬可福音 1章 1節到 5節\n創世記 第一章 第一至三節"
 if "final_text" not in st.session_state:
     st.session_state.final_text = ""
 
@@ -542,12 +463,13 @@ def clear_text():
 output_mode = st.radio(
     "請選擇輸出排版模式：",
     options=["模式 1：每節顯示書名簡寫 (例如：可 1:1)", "模式 2：頂部顯示完整書名 (例如：馬可福音)"],
-    horizontal=False # 在手機上改為垂直排列會更好點擊
+    index=1, # ★ 預設為模式 2
+    horizontal=False 
 )
 
 include_footnotes = st.checkbox("📖 包含註解 (經文標示出處，並將完整註解整理於最下方)", value=False)
 
-st.text_area("請輸入經節 (可多行或逗號分隔)", key="user_input", height=150)
+st.text_area("請輸入經節 (支援語音辨識、完整書名、各種標點符號)", key="user_input", height=150)
 
 col1, col2 = st.columns([1, 4])
 with col1: btn_start = st.button("🚀 開始抓取", type="primary")
@@ -619,7 +541,7 @@ if btn_start:
             final_lines.extend(all_footnotes_list)
 
         if not final_lines:
-            st.error("找不到任何經文，請檢查輸入格式。")
+            st.error("找不到任何經文，請檢查您的輸入是否正確。")
         else:
             st.session_state.final_text = "\n".join(final_lines)
 
@@ -627,24 +549,25 @@ if st.session_state.final_text:
     final_text = st.session_state.final_text
     st.success("🎉 抓取完成！")
     
-    # 限制顯示區塊的高度，避免註解太長要滑很久
     st.markdown(f"""
-        <div style="height: 400px; overflow-y: auto; background-color: #f0f2f6; padding: 15px; border-radius: 10px; font-family: monospace; font-size: 16px; line-height:1.6; margin-bottom: 20px;">
+        <div style="height: 350px; overflow-y: auto; background-color: #f0f2f6; padding: 15px; border-radius: 10px; font-family: monospace; font-size: 16px; line-height:1.6; margin-bottom: 20px;">
             {final_text.replace(chr(10), '<br>')}
         </div>
         """, unsafe_allow_html=True)
     
-    st.write("### 📥 瀏覽與匯出")
-    st.info("💡 提示：點擊下方按鈕將開啟新分頁預覽，您可以直接在分頁中列印或儲存檔案。")
+    st.write("### 📥 閱讀與匯出")
+    st.info("💡 點擊【🌐 網頁版】開啟新分頁後，點擊右下角的相機按鈕即可一鍵儲存為最高畫質圖片並分享至 LINE！")
     
-    dl_col1, dl_col2, dl_col3, dl_col4 = st.columns(4)
+    # 改為 3 個大按鈕，去除舊有的 PIL 產圖，視覺更俐落
+    dl_col1, dl_col2, dl_col3 = st.columns(3)
     
     with dl_col1:
         st.download_button("📝 純文字 (.txt)", data=final_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
         
     with dl_col2:
         html_data = generate_html(final_text)
-        render_open_new_tab_button(html_data.encode('utf-8'), "text/html", "🌐 網頁版")
+        # 用紅色高亮網頁版按鈕，吸引使用者點擊
+        render_open_new_tab_button(html_data.encode('utf-8'), "text/html", "🌐 網頁 / 圖片版", color_theme="primary")
     
     with dl_col3:
         if HAS_REPORTLAB and FONT_LOADED:
@@ -655,13 +578,3 @@ if st.session_state.final_text:
                 st.button("📄 PDF (錯誤)", disabled=True, use_container_width=True)
         else:
             st.button("📄 缺字型", disabled=True, use_container_width=True)
-            
-    with dl_col4:
-        if HAS_PIL and os.path.exists(FONT_PATH):
-            img_data = generate_image(final_text)
-            if img_data:
-                render_open_new_tab_button(img_data, "image/png", "🖼️ 圖片版")
-            else:
-                st.button("🖼️ 圖片 (錯誤)", disabled=True, use_container_width=True)
-        else:
-            st.button("🖼️ 缺字型", disabled=True, use_container_width=True)
