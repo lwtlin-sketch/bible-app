@@ -18,6 +18,7 @@ try:
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.enums import TA_CENTER
     from reportlab.lib.colors import HexColor
+    from reportlab.lib.fonts import addMapping # ★ 補回遺失的 addMapping ★
     HAS_REPORTLAB = True
 except ImportError:
     HAS_REPORTLAB = False
@@ -58,7 +59,7 @@ SEPARATOR_LINE = "-" * 50
 FOOTNOTE_SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━━━━━━"
 FOOTNOTE_TITLE = "【 註 解 】"
 
-# --- Streamlit 介面邏輯 (先設定才能用 st.error) ---
+# --- Streamlit 介面邏輯 ---
 st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
 
 st.markdown("""
@@ -78,7 +79,6 @@ FONT_PATH = "NotoSansTC-Regular.ttf"
 FONT_LOADED = False
 FONT_ERROR_MSG = ""
 
-# ★ PDF 除錯雷達 ★
 if not os.path.exists(FONT_PATH):
     st.error(f"⚠️ 系統找不到 `{FONT_PATH}`！請確認 GitHub 專案根目錄下有這個檔案。")
 elif HAS_REPORTLAB:
@@ -396,31 +396,18 @@ def generate_pdf(text_content):
         return buffer.getvalue()
     except Exception: return None
 
-# --- 產生 圖片 (PNG) ★ 防切斷安全機制 ★ ---
+# --- ★ 圖片引擎 (PIL) 強制防切斷與防重疊升級版 ★ ---
 def generate_image(text_content):
     if not HAS_PIL or not os.path.exists(FONT_PATH): return None
     
-    # 預設最高畫質
     SCALE = 3 
     font_size = 20 * SCALE
     line_spacing = 10 * SCALE
     margin = 50 * SCALE
     max_width = 800 * SCALE
     
-    # 1. 第一階段：先粗略計算總高度，決定是否降級 SCALE 防止手機切圖
-    estimated_lines = len(text_content.split('\n')) * 1.5 # 粗略估算換行後行數
-    estimated_height = estimated_lines * (font_size + line_spacing) + 2 * margin
-    
-    # 手機瀏覽器極限通常在 8000px~10000px 左右，我們設安全極限 6000px
-    if estimated_height > 6000: SCALE = 2
-    if estimated_height > 12000: SCALE = 1
-        
-    # 重新計算最終尺寸
-    font_size = 20 * SCALE
-    line_spacing = 10 * SCALE
-    margin = 50 * SCALE
-    max_width = 800 * SCALE
-    usable_width = max_width - 2 * margin
+    # ★ 關鍵修復 1：右側保留超大安全區(減去 60 像素)，防止字型寬度誤差導致衝出右邊界
+    usable_width = max_width - 2 * margin - (30 * SCALE)
     
     try: 
         font = ImageFont.truetype(FONT_PATH, font_size)
@@ -498,6 +485,7 @@ def generate_image(text_content):
                 
         wrapped_lines.append(("_VERSE_SPACER_", 0, "spacer", None)) 
 
+    # ★ 關鍵修復 2：重新精確計算高度，並在最下方加上 200 像素的防切斷留白
     total_height = 2 * margin
     for text, _, l_type, _ in wrapped_lines:
         if text == "_SPACER_": total_height += int(font_size * 0.8)
@@ -507,6 +495,8 @@ def generate_image(text_content):
         elif l_type == "separator": total_height += font_size
         elif l_type == "footnote": total_height += int(font_size * 0.8) + line_spacing
         else: total_height += font_size + line_spacing
+        
+    total_height += (200 * SCALE) # 底部超大安全緩衝區，保證絕不切字
             
     img = Image.new('RGB', (max_width, total_height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
@@ -522,18 +512,14 @@ def generate_image(text_content):
             
         if l_type == "title":
             draw.text((margin, y_text), text, font=font_title, fill=(31, 78, 121))
-            try:
-                bbox = draw.textbbox((margin, y_text), text, font=font_title)
-                text_bottom_y = bbox[3] 
-            except AttributeError:
-                text_bottom_y = y_text + int(font_size * 1.3)
-            last_title_bottom_y = text_bottom_y
+            # ★ 關鍵修復 3：捨棄 textbbox，直接用絕對字高往下推 1.5 倍的距離再畫線
+            last_title_bottom_y = y_text + int(font_size * 1.5)
             y_text += int(font_size * 1.3)
             
         elif l_type == "line":
-            line_y = last_title_bottom_y + (15 * SCALE)
+            line_y = last_title_bottom_y
             draw.line([(margin, line_y), (max_width - margin, line_y)], fill=(31, 78, 121), width=int(2.5*SCALE))
-            y_text = line_y + (25 * SCALE)
+            y_text = line_y + (15 * SCALE) # 畫完線後往下推，準備印第一行字
             
         elif l_type == "separator":
             try: w = font.getlength(text)
@@ -572,12 +558,20 @@ def generate_image(text_content):
             else:
                 draw.text((margin + x_offset, y_text), text, font=current_font, fill=(40, 40, 40))
             y_text += font_size + line_spacing
+            
+    # 如果圖片長度超過一定限度，為防止手機瀏覽器無法載入，進行安全縮小
+    if total_height > 18000:
+        SCALE_DOWN = 2
+    else:
+        SCALE_DOWN = SCALE
         
-    img = img.resize((max_width // SCALE, total_height // SCALE), Image.Resampling.LANCZOS)
+    img = img.resize((max_width // SCALE_DOWN, total_height // SCALE_DOWN), Image.Resampling.LANCZOS)
     buffer = io.BytesIO()
     img.save(buffer, format="PNG", optimize=True)
     return buffer.getvalue()
 
+
+# --- Streamlit 介面 ---
 st.title("📖 恢復本經節抓取工具")
 
 if "user_input" not in st.session_state:
@@ -707,7 +701,6 @@ if st.session_state.final_text:
         with st.spinner('正在繪製精美高畫質長圖...'):
             img_data = generate_image(final_text)
             if img_data:
-                # ★ 破解 LINE 長按限制：使用最原始的 Base64 <img> 標籤直接渲染
                 b64_img = base64.b64encode(img_data).decode('utf-8')
                 st.markdown(f'<img src="data:image/png;base64,{b64_img}" style="width: 100%; border: 1px solid #ccc; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">', unsafe_allow_html=True)
             else:
