@@ -14,11 +14,8 @@ try:
     from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.lib.pagesizes import A4
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-    from reportlab.platypus.flowables import HRFlowable # 用來畫 PDF 標題底線
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.fonts import addMapping
-    from reportlab.lib.colors import HexColor # 用來處理 Hex 色碼
-    from reportlab.lib.enums import TA_CENTER # 用來讓 PDF 菱形置中
+    from reportlab.lib.enums import TA_CENTER
     HAS_REPORTLAB = True
 except ImportError:
     HAS_REPORTLAB = False
@@ -59,16 +56,13 @@ SEPARATOR_LINE = "-" * 50
 FOOTNOTE_SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━━━━━━"
 FOOTNOTE_TITLE = "【 註 解 】"
 
-FONT_PATH = "NotoSansTC-VariableFont_wght.ttf"
+# ★ 字型檔名已更新為您確認的靜態檔 ★
+FONT_PATH = "NotoSansTC-Regular.ttf"
 FONT_LOADED = False
 
 if os.path.exists(FONT_PATH) and HAS_REPORTLAB:
     try:
         pdfmetrics.registerFont(TTFont('NotoSansTC', FONT_PATH))
-        addMapping('NotoSansTC', 0, 0, 'NotoSansTC') 
-        addMapping('NotoSansTC', 1, 0, 'NotoSansTC') 
-        addMapping('NotoSansTC', 0, 1, 'NotoSansTC') 
-        addMapping('NotoSansTC', 1, 1, 'NotoSansTC') 
         FONT_LOADED = True
     except Exception:
         pass
@@ -289,7 +283,6 @@ def generate_html(text_content):
                 book_part = match.group(2)
                 num_part = match.group(3)
                 text = match.group(4)
-                
                 if "｜" in full_ref:
                     html_template += f'<div class="footnote"><span class="ref">{full_ref}</span><span class="text">{text}</span></div>\n'
                 else:
@@ -332,7 +325,7 @@ def render_open_new_tab_button(data_bytes, mime_type, button_text, color_theme="
     """
     components.html(button_html, height=55)
 
-# --- ★ PDF 生成完美重寫：支援標題實線、置中菱形、紅藍經文混色 ★ ---
+# --- ★ PDF 完美排版重寫 (安全標籤版) ★ ---
 def generate_pdf(text_content):
     if not HAS_REPORTLAB or not FONT_LOADED: return None
     buffer = io.BytesIO()
@@ -340,60 +333,43 @@ def generate_pdf(text_content):
     styles = getSampleStyleSheet()
     
     verse_style = ParagraphStyle('VerseStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=14, leading=22, spaceAfter=8, wordWrap='CJK', leftIndent=40, firstLineIndent=-40)
-    footnote_style = ParagraphStyle('FootnoteStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=11, leading=17, spaceAfter=6, wordWrap='CJK', leftIndent=40, firstLineIndent=-40, textColor=HexColor("#555555"))
-    title_style = ParagraphStyle('TitleStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=16, leading=24, spaceAfter=6, textColor=HexColor("#1F4E79"))
+    footnote_style = ParagraphStyle('FootnoteStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=11, leading=17, spaceAfter=6, wordWrap='CJK', leftIndent=40, firstLineIndent=-40, textColor="#555555")
     
-    # 專門用來畫菱形分隔的置中樣式
-    separator_style = ParagraphStyle('SeparatorStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=12, leading=18, spaceAfter=15, spaceBefore=15, alignment=TA_CENTER, textColor=HexColor("#CCCCCC"))
-
+    # 標題樣式 (自帶下邊框，絕對不會切到字)
+    title_style = ParagraphStyle('TitleStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=16, leading=24, spaceBefore=20, spaceAfter=15, textColor="#1F4E79", borderWidth=1.5, borderColor="#1F4E79", borderPadding=(0,0,8,0))
+    
+    # 菱形分隔線樣式
+    separator_style = ParagraphStyle('SeparatorStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=12, alignment=TA_CENTER, textColor="#CCCCCC", spaceBefore=15, spaceAfter=15)
+    
     story = []
     for line in text_content.split('\n'):
         line = line.strip()
         if not line: continue
-        
-        # 處理灰色小菱形分隔線
-        elif line == SEPARATOR_LINE:
-            story.append(Paragraph("◆ &nbsp; ◆ &nbsp; ◆", separator_style))
-            
-        elif line == FOOTNOTE_SEPARATOR: 
-            story.append(Spacer(1, 20))
-            
-        # 處理書卷標題，印完標題後立刻畫一條深藍實線 (HRFlowable)
-        elif line == FOOTNOTE_TITLE or line in FULL_BIBLE_BOOKS:
-            story.append(Spacer(1, 15))
-            story.append(Paragraph(f"<b>{line}</b>", title_style))
-            # 畫一條寬度 100%、粗度 1.5 點的深藍色實線，上下邊距設為適當大小
-            story.append(HRFlowable(width="100%", thickness=1.5, color=HexColor("#1F4E79"), spaceBefore=2, spaceAfter=15))
-            
-        elif "｜" in line: 
-            story.append(Paragraph(line, footnote_style))
-            
-        # 處理一般經文，動態上色 (書名深藍、數字深紅)
+        elif line == SEPARATOR_LINE: story.append(Paragraph("◆   ◆   ◆", separator_style))
+        elif line == FOOTNOTE_SEPARATOR: story.append(Spacer(1, 20))
+        elif line == FOOTNOTE_TITLE: story.append(Paragraph(line, title_style))
+        elif line in FULL_BIBLE_BOOKS: story.append(Paragraph(line, title_style))
+        elif "｜" in line: story.append(Paragraph(line, footnote_style))
         else:
+            # 安全的正則表達式，為書名與數字加上顏色標籤
             match = re.match(r'^(([一-龥]*)\s*(\d+:\d+))\s+(.*)', line)
             if match:
                 book_part = match.group(2).strip()
                 num_part = match.group(3).strip()
                 text_part = match.group(4).strip()
-                
-                # 利用 HTML Font tag 來指定顏色
                 color_str = ""
-                if book_part:
-                    color_str += f'<font color="#1F4E79">{book_part}</font> '
-                if num_part:
-                    color_str += f'<font color="#B22222">{num_part}</font> '
-                    
+                if book_part: color_str += f'<font color="#1F4E79">{book_part}</font> '
+                if num_part: color_str += f'<font color="#B22222">{num_part}</font> '
                 story.append(Paragraph(f"{color_str}{text_part}", verse_style))
             else:
                 story.append(Paragraph(line, verse_style))
-                
     try:
         doc.build(story)
         buffer.seek(0)
         return buffer.getvalue()
     except Exception: return None
 
-# --- ★ 圖片生成完美重寫：使用 textbbox 解決標題底線錯位 ★ ---
+# --- ★ 圖片引擎 (PIL) 重寫：精準測量、拒絕擁擠 ★ ---
 def generate_image(text_content):
     if not HAS_PIL or not os.path.exists(FONT_PATH): return None
     
@@ -425,7 +401,7 @@ def generate_image(text_content):
         if line == FOOTNOTE_TITLE or line in FULL_BIBLE_BOOKS:
             wrapped_lines.append(("_SPACER_", 0, "spacer", None))
             wrapped_lines.append((line, 0, "title", None))
-            wrapped_lines.append(("_LINE_", 0, "line", None)) # 標記此處要畫線
+            wrapped_lines.append(("_LINE_", 0, "line", None)) # 畫深藍實線
             continue
             
         if line == SEPARATOR_LINE:
@@ -463,30 +439,24 @@ def generate_image(text_content):
             current_max_width = usable_width if is_first_line else (usable_width - indent_width)
             
             if text_len > current_max_width:
-                if is_first_line:
-                    wrapped_lines.append((current_line, 0, line_type, (book_part, num_part)))
-                    is_first_line = False
-                else:
-                    wrapped_lines.append((current_line, indent_width, line_type, None))
+                wrapped_lines.append((current_line, 0 if is_first_line else indent_width, line_type, (book_part, num_part) if is_first_line else None))
                 current_line = char
+                is_first_line = False
             else:
                 current_line = test_line
                 
         if current_line:
-            if is_first_line:
-                wrapped_lines.append((current_line, 0, line_type, (book_part, num_part)))
-            else:
-                wrapped_lines.append((current_line, indent_width, line_type, None))
+            wrapped_lines.append((current_line, 0 if is_first_line else indent_width, line_type, (book_part, num_part) if is_first_line else None))
                 
         wrapped_lines.append(("_VERSE_SPACER_", 0, "spacer", None)) 
 
-    # 計算總高度
+    # 計算總高度 (加入寬鬆留白)
     total_height = 2 * margin
     for text, _, l_type, _ in wrapped_lines:
         if text == "_SPACER_": total_height += int(font_size * 0.8)
-        elif text == "_VERSE_SPACER_": total_height += int(font_size * 0.4)
+        elif text == "_VERSE_SPACER_": total_height += int(font_size * 0.6) # 經文間隔微調
         elif l_type == "title": total_height += int(font_size * 1.3)
-        elif l_type == "line": total_height += int(font_size * 0.8)
+        elif l_type == "line": total_height += int(font_size * 1.5) # 標題下方與線條的大留白
         elif l_type == "separator": total_height += font_size
         elif l_type == "footnote": total_height += int(font_size * 0.8) + line_spacing
         else: total_height += font_size + line_spacing
@@ -495,35 +465,33 @@ def generate_image(text_content):
     draw = ImageDraw.Draw(img)
     
     y_text = margin
-    for i, (text, x_offset, l_type, prefix_data) in enumerate(wrapped_lines):
+    for text, x_offset, l_type, prefix_data in wrapped_lines:
         if text == "_SPACER_":
             y_text += int(font_size * 0.8)
             continue
         if text == "_VERSE_SPACER_":
-            y_text += int(font_size * 0.4)
+            y_text += int(font_size * 0.6)
             continue
             
         if l_type == "title":
-            # 畫出標題，並用 textbbox 精準測量這段文字的底部邊界 (Y軸最大值)
-            draw.text((margin, y_text), text, font=font_title, fill=(31, 78, 121), stroke_width=2)
+            draw.text((margin, y_text), text, font=font_title, fill=(31, 78, 121))
             
-            # 使用 textbbox 取得 [left, top, right, bottom] 座標
-            # 如果雲端舊版 PIL 不支援 textbbox，就退回原本的方法但給予充足留白
+            # 使用 textbbox 精準捕捉文字真正的底端
             try:
                 bbox = draw.textbbox((margin, y_text), text, font=font_title)
-                text_bottom_y = bbox[3] # 精準拿到文字的最底端
+                text_bottom_y = bbox[3] 
             except AttributeError:
                 text_bottom_y = y_text + int(font_size * 1.3)
                 
-            # 將這個底端座標暫存起來，等下一回合畫線時使用
             last_title_bottom_y = text_bottom_y
             y_text += int(font_size * 1.3)
             
         elif l_type == "line":
-            # 畫標題下方的深藍色實線：在文字底部精準往下加 12 像素畫線
-            line_y = last_title_bottom_y + (12 * SCALE)
+            # ★ 在文字正下方強制增加 15 像素留白後，再畫線
+            line_y = last_title_bottom_y + (15 * SCALE)
             draw.line([(margin, line_y), (max_width - margin, line_y)], fill=(31, 78, 121), width=int(2.5*SCALE))
-            y_text += int(font_size * 0.8)
+            # ★ 畫完線後，再強制往下推 25 像素，確保第一行經文不會撞到線
+            y_text = line_y + (25 * SCALE)
             
         elif l_type == "separator":
             try: w = font.getlength(text)
@@ -537,10 +505,10 @@ def generate_image(text_content):
                 full_pref = f"{bp} {np} " if bp else f"{np} "
                 try: pw = font_small.getlength(full_pref)
                 except: pw = font_small.getsize(full_pref)[0]
-                draw.text((margin, y_text), full_pref, font=font_small, fill=(100, 100, 100), stroke_width=1)
-                draw.text((margin + pw, y_text), text, font=font_small, fill=(100, 100, 100), stroke_width=1)
+                draw.text((margin, y_text), full_pref, font=font_small, fill=(100, 100, 100))
+                draw.text((margin + pw, y_text), text, font=font_small, fill=(100, 100, 100))
             else:
-                draw.text((margin + x_offset, y_text), text, font=font_small, fill=(100, 100, 100), stroke_width=1)
+                draw.text((margin + x_offset, y_text), text, font=font_small, fill=(100, 100, 100))
             y_text += int(font_size * 0.8) + line_spacing
             
         else:
@@ -549,18 +517,18 @@ def generate_image(text_content):
                 bp, np = prefix_data
                 cur_x = margin
                 if bp: 
-                    draw.text((cur_x, y_text), bp + " ", font=current_font, fill=(31, 78, 121), stroke_width=1)
+                    draw.text((cur_x, y_text), bp + " ", font=current_font, fill=(31, 78, 121))
                     try: w = current_font.getlength(bp + " ")
                     except: w = current_font.getsize(bp + " ")[0]
                     cur_x += w
                 if np: 
-                    draw.text((cur_x, y_text), np + " ", font=current_font, fill=(178, 34, 34), stroke_width=1)
+                    draw.text((cur_x, y_text), np + " ", font=current_font, fill=(178, 34, 34))
                     try: w = current_font.getlength(np + " ")
                     except: w = current_font.getsize(np + " ")[0]
                     cur_x += w
-                draw.text((cur_x, y_text), text, font=current_font, fill=(40, 40, 40), stroke_width=1)
+                draw.text((cur_x, y_text), text, font=current_font, fill=(40, 40, 40))
             else:
-                draw.text((margin + x_offset, y_text), text, font=current_font, fill=(40, 40, 40), stroke_width=1)
+                draw.text((margin + x_offset, y_text), text, font=current_font, fill=(40, 40, 40))
             y_text += font_size + line_spacing
         
     img = img.resize((max_width // SCALE, total_height // SCALE), Image.Resampling.LANCZOS)
@@ -586,7 +554,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 if not os.path.exists(FONT_PATH):
-    st.error("⚠️ 系統找不到 `NotoSansTC-VariableFont_wght.ttf`！請確認您的 GitHub 專案根目錄下有這個檔案。")
+    st.error("⚠️ 系統找不到 `NotoSansTC-Regular.ttf`！請確認您的 GitHub 專案根目錄下有這個檔案，且檔名大小寫完全一致。")
 
 st.title("📖 恢復本經節抓取工具")
 
@@ -697,7 +665,7 @@ if st.session_state.final_text:
         
     with dl_col2:
         html_data = generate_html(final_text)
-        st.download_button("🌐 下載網頁版 (.html)", data=html_data.encode('utf-8'), file_name="bible_verses.html", mime="text/html", use_container_width=True)
+        render_open_new_tab_button(html_data.encode('utf-8'), "text/html", "🌐 網頁 / 圖片版", color_theme="primary")
     
     with dl_col3:
         if HAS_REPORTLAB and FONT_LOADED:
@@ -711,7 +679,6 @@ if st.session_state.final_text:
 
     st.write("---")
     
-    # 圖片直接顯示於下方供長按儲存，不需額外按鈕切換
     if HAS_PIL and os.path.exists(FONT_PATH):
         st.markdown('<div class="img-instruction">👇 手機/平板請「長按圖片」分享至 LINE，電腦請「按右鍵」另存圖片 👇</div>', unsafe_allow_html=True)
         
