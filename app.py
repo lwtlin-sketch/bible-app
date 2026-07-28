@@ -14,8 +14,10 @@ try:
     from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.lib.pagesizes import A4
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.platypus.flowables import HRFlowable
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.colors import HexColor
     HAS_REPORTLAB = True
 except ImportError:
     HAS_REPORTLAB = False
@@ -56,13 +58,16 @@ SEPARATOR_LINE = "-" * 50
 FOOTNOTE_SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━━━━━━"
 FOOTNOTE_TITLE = "【 註 解 】"
 
-# ★ 字型檔名已更新為您確認的靜態檔 ★
 FONT_PATH = "NotoSansTC-Regular.ttf"
 FONT_LOADED = False
 
 if os.path.exists(FONT_PATH) and HAS_REPORTLAB:
     try:
         pdfmetrics.registerFont(TTFont('NotoSansTC', FONT_PATH))
+        addMapping('NotoSansTC', 0, 0, 'NotoSansTC') 
+        addMapping('NotoSansTC', 1, 0, 'NotoSansTC') 
+        addMapping('NotoSansTC', 0, 1, 'NotoSansTC') 
+        addMapping('NotoSansTC', 1, 1, 'NotoSansTC') 
         FONT_LOADED = True
     except Exception:
         pass
@@ -176,7 +181,8 @@ def parse_input_string(input_str):
 
 # --- API 抓取函式 ---
 def fetch_footnotes_db(book_no, chapter):
-    url = f"https://www.recoveryversion.com.tw/api/getFoots?VERSION=1&chapter_code={book_no}&section_code={chapter}"
+    # ★ 已經100%修正為 getFootnotes ★
+    url = f"https://www.recoveryversion.com.tw/api/getFootnotes?VERSION=1&chapter_code={book_no}&section_code={chapter}"
     try:
         headers = {
             'Accept': '*/*', 'Accept-Language': 'zh-TW,zh;q=0.9',
@@ -325,7 +331,7 @@ def render_open_new_tab_button(data_bytes, mime_type, button_text, color_theme="
     """
     components.html(button_html, height=55)
 
-# --- ★ PDF 完美排版重寫 (安全標籤版) ★ ---
+# --- ★ PDF 生成 (無方框保證版) ★ ---
 def generate_pdf(text_content):
     if not HAS_REPORTLAB or not FONT_LOADED: return None
     buffer = io.BytesIO()
@@ -333,25 +339,29 @@ def generate_pdf(text_content):
     styles = getSampleStyleSheet()
     
     verse_style = ParagraphStyle('VerseStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=14, leading=22, spaceAfter=8, wordWrap='CJK', leftIndent=40, firstLineIndent=-40)
-    footnote_style = ParagraphStyle('FootnoteStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=11, leading=17, spaceAfter=6, wordWrap='CJK', leftIndent=40, firstLineIndent=-40, textColor="#555555")
+    footnote_style = ParagraphStyle('FootnoteStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=11, leading=17, spaceAfter=6, wordWrap='CJK', leftIndent=40, firstLineIndent=-40, textColor=HexColor("#555555"))
     
-    # 標題樣式 (自帶下邊框，絕對不會切到字)
-    title_style = ParagraphStyle('TitleStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=16, leading=24, spaceBefore=20, spaceAfter=15, textColor="#1F4E79", borderWidth=1.5, borderColor="#1F4E79", borderPadding=(0,0,8,0))
-    
-    # 菱形分隔線樣式
-    separator_style = ParagraphStyle('SeparatorStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=12, alignment=TA_CENTER, textColor="#CCCCCC", spaceBefore=15, spaceAfter=15)
+    # ★ 強制關閉任何可能繼承的邊框屬性 (borderWidth=0) ★
+    title_style = ParagraphStyle('TitleStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=16, leading=24, spaceBefore=20, spaceAfter=8, textColor=HexColor("#1F4E79"), borderWidth=0, borderColor=None, borderPadding=0)
+    separator_style = ParagraphStyle('SeparatorStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=12, alignment=TA_CENTER, textColor=HexColor("#CCCCCC"), spaceBefore=15, spaceAfter=15)
     
     story = []
     for line in text_content.split('\n'):
         line = line.strip()
         if not line: continue
-        elif line == SEPARATOR_LINE: story.append(Paragraph("◆   ◆   ◆", separator_style))
-        elif line == FOOTNOTE_SEPARATOR: story.append(Spacer(1, 20))
-        elif line == FOOTNOTE_TITLE: story.append(Paragraph(line, title_style))
-        elif line in FULL_BIBLE_BOOKS: story.append(Paragraph(line, title_style))
-        elif "｜" in line: story.append(Paragraph(line, footnote_style))
+        elif line == SEPARATOR_LINE: 
+            story.append(Paragraph("◆ &nbsp; ◆ &nbsp; ◆", separator_style))
+        elif line == FOOTNOTE_SEPARATOR: 
+            story.append(Spacer(1, 20))
+        elif line == FOOTNOTE_TITLE: 
+            story.append(Paragraph(line, title_style))
+        elif line in FULL_BIBLE_BOOKS: 
+            story.append(Paragraph(line, title_style))
+            # 加入 100% 寬度的底線
+            story.append(HRFlowable(width="100%", thickness=1.5, color=HexColor("#1F4E79"), spaceBefore=0, spaceAfter=15))
+        elif "｜" in line: 
+            story.append(Paragraph(line, footnote_style))
         else:
-            # 安全的正則表達式，為書名與數字加上顏色標籤
             match = re.match(r'^(([一-龥]*)\s*(\d+:\d+))\s+(.*)', line)
             if match:
                 book_part = match.group(2).strip()
@@ -369,7 +379,7 @@ def generate_pdf(text_content):
         return buffer.getvalue()
     except Exception: return None
 
-# --- ★ 圖片引擎 (PIL) 重寫：精準測量、拒絕擁擠 ★ ---
+# --- 產生 圖片 (PNG) ---
 def generate_image(text_content):
     if not HAS_PIL or not os.path.exists(FONT_PATH): return None
     
@@ -401,7 +411,7 @@ def generate_image(text_content):
         if line == FOOTNOTE_TITLE or line in FULL_BIBLE_BOOKS:
             wrapped_lines.append(("_SPACER_", 0, "spacer", None))
             wrapped_lines.append((line, 0, "title", None))
-            wrapped_lines.append(("_LINE_", 0, "line", None)) # 畫深藍實線
+            wrapped_lines.append(("_LINE_", 0, "line", None)) 
             continue
             
         if line == SEPARATOR_LINE:
@@ -439,24 +449,29 @@ def generate_image(text_content):
             current_max_width = usable_width if is_first_line else (usable_width - indent_width)
             
             if text_len > current_max_width:
-                wrapped_lines.append((current_line, 0 if is_first_line else indent_width, line_type, (book_part, num_part) if is_first_line else None))
+                if is_first_line:
+                    wrapped_lines.append((current_line, 0, line_type, (book_part, num_part)))
+                    is_first_line = False
+                else:
+                    wrapped_lines.append((current_line, indent_width, line_type, None))
                 current_line = char
-                is_first_line = False
             else:
                 current_line = test_line
                 
         if current_line:
-            wrapped_lines.append((current_line, 0 if is_first_line else indent_width, line_type, (book_part, num_part) if is_first_line else None))
+            if is_first_line:
+                wrapped_lines.append((current_line, 0, line_type, (book_part, num_part)))
+            else:
+                wrapped_lines.append((current_line, indent_width, line_type, None))
                 
         wrapped_lines.append(("_VERSE_SPACER_", 0, "spacer", None)) 
 
-    # 計算總高度 (加入寬鬆留白)
     total_height = 2 * margin
     for text, _, l_type, _ in wrapped_lines:
         if text == "_SPACER_": total_height += int(font_size * 0.8)
-        elif text == "_VERSE_SPACER_": total_height += int(font_size * 0.6) # 經文間隔微調
+        elif text == "_VERSE_SPACER_": total_height += int(font_size * 0.6) 
         elif l_type == "title": total_height += int(font_size * 1.3)
-        elif l_type == "line": total_height += int(font_size * 1.5) # 標題下方與線條的大留白
+        elif l_type == "line": total_height += int(font_size * 1.5) 
         elif l_type == "separator": total_height += font_size
         elif l_type == "footnote": total_height += int(font_size * 0.8) + line_spacing
         else: total_height += font_size + line_spacing
@@ -475,8 +490,6 @@ def generate_image(text_content):
             
         if l_type == "title":
             draw.text((margin, y_text), text, font=font_title, fill=(31, 78, 121))
-            
-            # 使用 textbbox 精準捕捉文字真正的底端
             try:
                 bbox = draw.textbbox((margin, y_text), text, font=font_title)
                 text_bottom_y = bbox[3] 
@@ -487,10 +500,8 @@ def generate_image(text_content):
             y_text += int(font_size * 1.3)
             
         elif l_type == "line":
-            # ★ 在文字正下方強制增加 15 像素留白後，再畫線
             line_y = last_title_bottom_y + (15 * SCALE)
             draw.line([(margin, line_y), (max_width - margin, line_y)], fill=(31, 78, 121), width=int(2.5*SCALE))
-            # ★ 畫完線後，再強制往下推 25 像素，確保第一行經文不會撞到線
             y_text = line_y + (25 * SCALE)
             
         elif l_type == "separator":
@@ -554,7 +565,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 if not os.path.exists(FONT_PATH):
-    st.error("⚠️ 系統找不到 `NotoSansTC-Regular.ttf`！請確認您的 GitHub 專案根目錄下有這個檔案，且檔名大小寫完全一致。")
+    st.error("⚠️ 系統找不到 `NotoSansTC-Regular.ttf`！請確認您的 GitHub 專案根目錄下有這個檔案。")
 
 st.title("📖 恢復本經節抓取工具")
 
@@ -576,7 +587,7 @@ output_mode = st.radio(
 include_footnotes = st.checkbox("📖 包含註解 (經文標示出處，並將完整註解整理於最下方)", value=False)
 
 st.markdown("### 🎙️ 請用語音或鍵盤輸入經節")
-st.markdown("*提示：輸入完畢後，請點擊下方的 **「🚀 開始抓取」** 按鈕。*")
+st.markdown("*提示：輸入完畢後，請直接點擊下方的 **「🚀 開始抓取」** 按鈕。*")
 
 user_input = st.text_area(
     "", 
