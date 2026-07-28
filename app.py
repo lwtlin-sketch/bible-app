@@ -58,10 +58,30 @@ SEPARATOR_LINE = "-" * 50
 FOOTNOTE_SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━━━━━━"
 FOOTNOTE_TITLE = "【 註 解 】"
 
+# --- Streamlit 介面邏輯 (先設定才能用 st.error) ---
+st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
+
+st.markdown("""
+    <style>
+    label[data-testid="stWidgetLabel"] p { font-size: 20px !important; font-weight: bold !important; }
+    div.stTextArea textarea { font-size: 20px !important; line-height: 1.6 !important; padding: 15px !important; height: 120px !important; }
+    div[data-testid="InputInstructions"] { display: none !important; }
+    div.stRadio div[data-testid="stMarkdownContainer"] p, div.stRadio div[data-testid="stMarkdownContainer"] span { font-size: 20px !important; line-height: 1.6 !important; }
+    div.stCheckbox div[data-testid="stMarkdownContainer"] p, div.stCheckbox div[data-testid="stMarkdownContainer"] span { font-size: 20px !important; line-height: 1.6 !important; }
+    div.stCheckbox { padding-top: 10px !important; padding-bottom: 10px !important; }
+    div.stButton > button { font-size: 20px !important; font-weight: bold !important; padding: 12px 20px !important; height: auto !important; }
+    .img-instruction { text-align:center; color:#B22222; font-weight:bold; margin-top:30px; margin-bottom:15px; font-size:18px;}
+    </style>
+    """, unsafe_allow_html=True)
+
 FONT_PATH = "NotoSansTC-Regular.ttf"
 FONT_LOADED = False
+FONT_ERROR_MSG = ""
 
-if os.path.exists(FONT_PATH) and HAS_REPORTLAB:
+# ★ PDF 除錯雷達 ★
+if not os.path.exists(FONT_PATH):
+    st.error(f"⚠️ 系統找不到 `{FONT_PATH}`！請確認 GitHub 專案根目錄下有這個檔案。")
+elif HAS_REPORTLAB:
     try:
         pdfmetrics.registerFont(TTFont('NotoSansTC', FONT_PATH))
         addMapping('NotoSansTC', 0, 0, 'NotoSansTC') 
@@ -69,8 +89,9 @@ if os.path.exists(FONT_PATH) and HAS_REPORTLAB:
         addMapping('NotoSansTC', 0, 1, 'NotoSansTC') 
         addMapping('NotoSansTC', 1, 1, 'NotoSansTC') 
         FONT_LOADED = True
-    except Exception:
-        pass
+    except Exception as e:
+        FONT_ERROR_MSG = str(e)
+        st.error(f"⚠️ PDF 字型載入失敗，真實錯誤訊息：\n{FONT_ERROR_MSG}")
 
 # --- 核心邏輯函式 ---
 def normalize_string(s):
@@ -181,8 +202,7 @@ def parse_input_string(input_str):
 
 # --- API 抓取函式 ---
 def fetch_footnotes_db(book_no, chapter):
-    # ★ 已經100%修正為 getFootnotes ★
-    url = f"https://www.recoveryversion.com.tw/api/getFootnotes?VERSION=1&chapter_code={book_no}&section_code={chapter}"
+    url = f"https://www.recoveryversion.com.tw/api/getFoots?VERSION=1&chapter_code={book_no}&section_code={chapter}"
     try:
         headers = {
             'Accept': '*/*', 'Accept-Language': 'zh-TW,zh;q=0.9',
@@ -331,7 +351,7 @@ def render_open_new_tab_button(data_bytes, mime_type, button_text, color_theme="
     """
     components.html(button_html, height=55)
 
-# --- ★ PDF 生成 (無方框保證版) ★ ---
+# --- 產生 PDF ---
 def generate_pdf(text_content):
     if not HAS_REPORTLAB or not FONT_LOADED: return None
     buffer = io.BytesIO()
@@ -340,8 +360,6 @@ def generate_pdf(text_content):
     
     verse_style = ParagraphStyle('VerseStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=14, leading=22, spaceAfter=8, wordWrap='CJK', leftIndent=40, firstLineIndent=-40)
     footnote_style = ParagraphStyle('FootnoteStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=11, leading=17, spaceAfter=6, wordWrap='CJK', leftIndent=40, firstLineIndent=-40, textColor=HexColor("#555555"))
-    
-    # ★ 強制關閉任何可能繼承的邊框屬性 (borderWidth=0) ★
     title_style = ParagraphStyle('TitleStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=16, leading=24, spaceBefore=20, spaceAfter=8, textColor=HexColor("#1F4E79"), borderWidth=0, borderColor=None, borderPadding=0)
     separator_style = ParagraphStyle('SeparatorStyle', parent=styles['Normal'], fontName='NotoSansTC', fontSize=12, alignment=TA_CENTER, textColor=HexColor("#CCCCCC"), spaceBefore=15, spaceAfter=15)
     
@@ -357,8 +375,7 @@ def generate_pdf(text_content):
             story.append(Paragraph(line, title_style))
         elif line in FULL_BIBLE_BOOKS: 
             story.append(Paragraph(line, title_style))
-            # 加入 100% 寬度的底線
-            story.append(HRFlowable(width="100%", thickness=1.5, color=HexColor("#1F4E79"), spaceBefore=0, spaceAfter=15))
+            story.append(HRFlowable(width=495, thickness=1.5, color=HexColor("#1F4E79"), spaceBefore=0, spaceAfter=15))
         elif "｜" in line: 
             story.append(Paragraph(line, footnote_style))
         else:
@@ -379,11 +396,26 @@ def generate_pdf(text_content):
         return buffer.getvalue()
     except Exception: return None
 
-# --- 產生 圖片 (PNG) ---
+# --- 產生 圖片 (PNG) ★ 防切斷安全機制 ★ ---
 def generate_image(text_content):
     if not HAS_PIL or not os.path.exists(FONT_PATH): return None
     
+    # 預設最高畫質
     SCALE = 3 
+    font_size = 20 * SCALE
+    line_spacing = 10 * SCALE
+    margin = 50 * SCALE
+    max_width = 800 * SCALE
+    
+    # 1. 第一階段：先粗略計算總高度，決定是否降級 SCALE 防止手機切圖
+    estimated_lines = len(text_content.split('\n')) * 1.5 # 粗略估算換行後行數
+    estimated_height = estimated_lines * (font_size + line_spacing) + 2 * margin
+    
+    # 手機瀏覽器極限通常在 8000px~10000px 左右，我們設安全極限 6000px
+    if estimated_height > 6000: SCALE = 2
+    if estimated_height > 12000: SCALE = 1
+        
+    # 重新計算最終尺寸
     font_size = 20 * SCALE
     line_spacing = 10 * SCALE
     margin = 50 * SCALE
@@ -495,7 +527,6 @@ def generate_image(text_content):
                 text_bottom_y = bbox[3] 
             except AttributeError:
                 text_bottom_y = y_text + int(font_size * 1.3)
-                
             last_title_bottom_y = text_bottom_y
             y_text += int(font_size * 1.3)
             
@@ -546,26 +577,6 @@ def generate_image(text_content):
     buffer = io.BytesIO()
     img.save(buffer, format="PNG", optimize=True)
     return buffer.getvalue()
-
-
-# --- Streamlit 介面邏輯 ---
-st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
-
-st.markdown("""
-    <style>
-    label[data-testid="stWidgetLabel"] p { font-size: 20px !important; font-weight: bold !important; }
-    div.stTextArea textarea { font-size: 20px !important; line-height: 1.6 !important; padding: 15px !important; height: 120px !important; }
-    div[data-testid="InputInstructions"] { display: none !important; }
-    div.stRadio div[data-testid="stMarkdownContainer"] p, div.stRadio div[data-testid="stMarkdownContainer"] span { font-size: 20px !important; line-height: 1.6 !important; }
-    div.stCheckbox div[data-testid="stMarkdownContainer"] p, div.stCheckbox div[data-testid="stMarkdownContainer"] span { font-size: 20px !important; line-height: 1.6 !important; }
-    div.stCheckbox { padding-top: 10px !important; padding-bottom: 10px !important; }
-    div.stButton > button { font-size: 20px !important; font-weight: bold !important; padding: 12px 20px !important; height: auto !important; }
-    .img-instruction { text-align:center; color:#B22222; font-weight:bold; margin-top:30px; margin-bottom:15px; font-size:18px;}
-    </style>
-    """, unsafe_allow_html=True)
-
-if not os.path.exists(FONT_PATH):
-    st.error("⚠️ 系統找不到 `NotoSansTC-Regular.ttf`！請確認您的 GitHub 專案根目錄下有這個檔案。")
 
 st.title("📖 恢復本經節抓取工具")
 
@@ -696,6 +707,8 @@ if st.session_state.final_text:
         with st.spinner('正在繪製精美高畫質長圖...'):
             img_data = generate_image(final_text)
             if img_data:
-                st.image(img_data, use_container_width=True)
+                # ★ 破解 LINE 長按限制：使用最原始的 Base64 <img> 標籤直接渲染
+                b64_img = base64.b64encode(img_data).decode('utf-8')
+                st.markdown(f'<img src="data:image/png;base64,{b64_img}" style="width: 100%; border: 1px solid #ccc; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">', unsafe_allow_html=True)
             else:
                 st.error("圖片繪製失敗，請確認字型檔案是否正確。")
