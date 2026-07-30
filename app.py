@@ -289,7 +289,7 @@ def render_giant_copy_button(text_content):
     """
     components.html(html_code, height=75)
 
-# --- 產生 網頁版 HTML (★ 支援深色模式與放大) ---
+# --- 產生 網頁版 HTML ---
 def generate_html(text_content, font_mult, theme):
     is_dark = (theme == "dark")
     bg_col = "#1E1E1E" if is_dark else "#ffffff"
@@ -309,10 +309,9 @@ def generate_html(text_content, font_mult, theme):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>經節抓取結果</title>
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
-            body {{ font-family: 'Noto Sans TC', sans-serif; line-height: 1.8; color: {text_col}; max-width: 800px; margin: 0 auto; padding: 40px 20px; background-color: {bg_col}; }}
+            body {{ font-family: 'Noto Sans TC', sans-serif; line-height: 1.8; color: {text_col}; max-width: 800px; margin: 0 auto; padding: 20px; background-color: {bg_col}; }}
             .book-title {{ color: {title_col}; font-size: {title_size}px; font-weight: 700; margin-top: 40px; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid {title_col}; }}
             .verse, .footnote {{ display: flex; text-align: justify; margin-bottom: 12px; }}
             .verse {{ font-size: {base_size}px; }}
@@ -346,36 +345,6 @@ def generate_html(text_content, font_mult, theme):
     html_template += "</body></html>"
     return html_template
 
-def render_open_new_tab_button(data_bytes, mime_type, button_text, color_theme="default"):
-    b64_data = base64.b64encode(data_bytes).decode('utf-8')
-    bg_color = "rgb(255, 75, 75)" if color_theme == "primary" else "rgb(255, 255, 255)"
-    text_color = "white" if color_theme == "primary" else "rgb(49, 51, 63)"
-    border = "none" if color_theme == "primary" else "1px solid rgba(49, 51, 63, 0.2)"
-    
-    button_html = f"""
-    <!DOCTYPE html><html><head><style>
-        body {{ margin: 0; padding: 0; font-family: "Source Sans Pro", sans-serif; }}
-        .btn {{
-            display: block; width: 100%; text-align: center; padding: 0.5rem 0;
-            border-radius: 0.5rem; font-size: 18px; font-weight: bold; line-height: 1.6;
-            color: {text_color}; background-color: {bg_color}; border: {border}; 
-            text-decoration: none; box-sizing: border-box; cursor: pointer; transition: all 0.2s ease;
-        }}
-        .btn:hover {{ opacity: 0.8; transform: scale(1.02); }}
-        @media (prefers-color-scheme: dark) {{
-            .btn:not([style*="rgb(255, 75, 75)"]) {{ color: rgb(250, 250, 250); background-color: rgb(14, 17, 23); border-color: rgba(250, 250, 250, 0.2); }}
-        }}
-    </style></head><body>
-        <a id="newTabLink" class="btn" target="_blank">{button_text}</a>
-        <script>
-            const str = atob("{b64_data}");
-            const bytes = new Uint8Array(str.length);
-            for (let i = 0; i < str.length; i++) bytes[i] = str.charCodeAt(i);
-            document.getElementById('newTabLink').href = URL.createObjectURL(new Blob([bytes], {{type: "{mime_type}"}}));
-        </script>
-    </body></html>
-    """
-    components.html(button_html, height=55)
 
 # --- 產生 PDF ---
 def generate_pdf(text_content, font_mult, theme):
@@ -581,6 +550,8 @@ if "user_input" not in st.session_state:
     st.session_state.user_input = st.query_params.get("q", "")
 if "final_text" not in st.session_state:
     st.session_state.final_text = ""
+if "show_web" not in st.session_state:
+    st.session_state.show_web = False # ★ 新增控制網頁預覽的變數
 
 auto_trigger = False
 if "q" in st.query_params and not st.session_state.get("auto_triggered", False):
@@ -590,6 +561,7 @@ if "q" in st.query_params and not st.session_state.get("auto_triggered", False):
 def clear_text():
     st.session_state.user_input = ""
     st.session_state.final_text = ""
+    st.session_state.show_web = False
     st.query_params.clear()
 
 with st.expander("⚙️ 輸出與排版設定 (深色模式/大小)", expanded=True):
@@ -609,6 +581,7 @@ with col1: btn_start = st.button("🚀 開始抓取", type="primary")
 with col2: st.button("🗑️ 清除內容", on_click=clear_text)
 
 if btn_start or auto_trigger:
+    st.session_state.show_web = False # ★ 每次重新抓取時自動關閉舊網頁預覽
     if not user_input.strip():
         st.warning("請輸入內容！")
     else:
@@ -684,13 +657,14 @@ if st.session_state.final_text:
     
     img_data = generate_image(final_text, font_mult, theme_val) if HAS_PIL else None
     
-    # ★ 將匯出按鈕區塊擴充為 4 個，並將網頁版加回來！
     dl_col1, dl_col2, dl_col3, dl_col4 = st.columns(4)
     with dl_col1:
         if img_data: st.download_button("📥 下載圖片", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True, type="primary")
         else: st.button("🖼️ 缺圖片套件", disabled=True, use_container_width=True)
     with dl_col2:
-        render_open_new_tab_button(generate_html(final_text, font_mult, theme_val).encode('utf-8'), "text/html", "🌐 網頁版(另開)", color_theme="default")
+        # ★ 改為內建按鈕，不再強制開新分頁！
+        if st.button("🌐 展開網頁版", use_container_width=True):
+            st.session_state.show_web = not st.session_state.show_web
     with dl_col3: 
         st.download_button("📝 下載純文字", data=final_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
     with dl_col4:
@@ -699,6 +673,13 @@ if st.session_state.final_text:
             if pdf_data: st.download_button("📄 下載 PDF", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
             else: st.button("📄 PDF (錯誤)", disabled=True, use_container_width=True)
         else: st.button("📄 缺字型", disabled=True, use_container_width=True)
+
+    # ★ 當使用者按下「展開網頁版」，就會在這裡無縫顯示！
+    if st.session_state.show_web:
+        st.markdown("---")
+        st.markdown("### 🌐 網頁版預覽 (可直接在此滑動閱讀)")
+        html_data = generate_html(final_text, font_mult, theme_val)
+        components.html(html_data, height=650, scrolling=True)
 
     st.write("---")
     if img_data:
