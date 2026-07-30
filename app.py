@@ -3,7 +3,6 @@ import streamlit.components.v1 as components
 import requests
 from bs4 import BeautifulSoup
 import re
-import time
 import io
 import os
 import base64
@@ -14,7 +13,7 @@ try:
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.lib.pagesizes import A4
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle # ★ 新增 Table 支援
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
     from reportlab.platypus.flowables import HRFlowable
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.enums import TA_CENTER
@@ -51,7 +50,6 @@ FULL_BIBLE_BOOKS = [
     "彼得前書", "彼得後書", "約翰一書", "約翰二書", "約翰三書", "猶大書", "啟示錄"
 ]
 
-# ★ 修正別名字典：移除了約一/二/三，保留原始縮寫，解決了「約三」的章節判定衝突
 BOOK_ALIASES = {
     "羅馬": "羅", "創世": "創", "啟示": "啟", "約翰": "約", 
     "馬太": "太", "馬可": "可", "路加": "路", "哥前": "林前", 
@@ -61,10 +59,8 @@ BOOK_ALIASES = {
 
 BOOK_MAP = {name: i+1 for i, name in enumerate(BIBLE_BOOKS)}
 BOOK_FULL_MAP = {name: full for name, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
-
 FULL_TO_SHORT = {full: short for short, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
 FULL_TO_SHORT.update(BOOK_ALIASES)
-
 ALL_BOOK_NAMES = sorted(FULL_BIBLE_BOOKS + BIBLE_BOOKS + list(BOOK_ALIASES.keys()), key=len, reverse=True)
 
 SEPARATOR_LINE = "-" * 50  
@@ -72,18 +68,14 @@ FOOTNOTE_SEPARATOR = "━━━━━━━━━━━━━━━━━━━�
 FOOTNOTE_TITLE = "【 註 解 】"
 
 # --- Streamlit 介面邏輯 ---
-st.set_page_config(page_title="恢復本經節抓取器", layout="centered")
+st.set_page_config(page_title="恢復本經節抓取器", layout="centered", page_icon="📖")
 
 st.markdown("""
     <style>
-    label[data-testid="stWidgetLabel"] p { font-size: 20px !important; font-weight: bold !important; }
+    label[data-testid="stWidgetLabel"] p { font-size: 18px !important; font-weight: bold !important; }
     div.stTextArea textarea { font-size: 20px !important; line-height: 1.6 !important; padding: 15px !important; height: 120px !important; }
     div[data-testid="InputInstructions"] { display: none !important; }
-    div.stRadio div[data-testid="stMarkdownContainer"] p, div.stRadio div[data-testid="stMarkdownContainer"] span { font-size: 20px !important; line-height: 1.6 !important; }
-    div.stCheckbox div[data-testid="stMarkdownContainer"] p, div.stCheckbox div[data-testid="stMarkdownContainer"] span { font-size: 20px !important; line-height: 1.6 !important; }
-    div.stCheckbox { padding-top: 10px !important; padding-bottom: 10px !important; }
-    div.stButton > button { font-size: 20px !important; font-weight: bold !important; padding: 12px 20px !important; height: auto !important; }
-    .img-instruction { text-align:center; color:#B22222; font-weight:bold; margin-top:30px; margin-bottom:15px; font-size:18px;}
+    .img-instruction { text-align:center; color:#B22222; font-weight:bold; margin-top:20px; margin-bottom:10px; font-size:16px;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -91,7 +83,7 @@ FONT_PATH = "NotoSansTC-Regular.ttf"
 FONT_LOADED = False
 
 if not os.path.exists(FONT_PATH):
-    st.error(f"⚠️ 系統找不到 `{FONT_PATH}`！請確認 GitHub 專案根目錄下有這個檔案。")
+    st.error(f"⚠️ 系統找不到 `{FONT_PATH}`！請確認專案根目錄下有這個檔案。")
 elif HAS_REPORTLAB:
     try:
         pdfmetrics.registerFont(TTFont('NotoSansTC', FONT_PATH))
@@ -108,7 +100,6 @@ def normalize_string(s):
     s = s.replace('啓', '啟').replace('世紀', '世記')
     s = s.replace('/', ':').replace('／', ':').replace('\\', ':')
     s = s.replace('–', '~').replace('—', '~').replace('−', '~').replace('-', '~')
-    
     r = ""
     for char in s:
         code = ord(char)
@@ -177,10 +168,8 @@ def parse_input_string(input_str):
             parts = remain.strip().split(' ', 1)
             ch_str, v_str = parts[0].strip(), parts[1].strip()
         else:
-            if last_chapter_val is not None:
-                ch_str, v_str = str(last_chapter_val), remain.strip()
-            else:
-                ch_str, v_str = remain.strip(), ""
+            if last_chapter_val is not None: ch_str, v_str = str(last_chapter_val), remain.strip()
+            else: ch_str, v_str = remain.strip(), ""
         
         current_ch = int(ch_str) if ch_str and ch_str.isdigit() else 1
         last_chapter_val = current_ch
@@ -283,115 +272,64 @@ def fetch_verse_dict(book_no, chapter, include_footnotes):
         return verse_dict
     except Exception as e: return {"error": f"連線錯誤: {str(e)}"}
 
-def generate_html(text_content):
-    html_template = """
-    <!DOCTYPE html>
-    <html lang="zh-TW">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>經節抓取結果</title>
-        <style>
-            @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
-            body { font-family: 'Noto Sans TC', sans-serif; line-height: 1.8; color: #333; max-width: 800px; margin: 0 auto; padding: 40px 20px; background-color: #ffffff; }
-            .book-title { color: #1F4E79; font-size: 24px; font-weight: 700; margin-top: 40px; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #1F4E79; }
-            .verse, .footnote { display: flex; text-align: justify; margin-bottom: 12px; }
-            .verse { font-size: 18px; }
-            .verse .ref { flex-shrink: 0; margin-right: 6px; color: #B22222; font-weight: bold; }
-            .verse .ref-book { color: #1F4E79; }
-            .footnote-title { font-size: 20px; font-weight: bold; color: #1F4E79; text-align: center; margin-top: 50px; margin-bottom: 20px; }
-            .footnote { font-size: 15px; color: #555; }
-            .footnote .ref { flex-shrink: 0; margin-right: 8px; color: #666; font-weight: bold; }
-            .separator { text-align: center; margin: 40px 0; color: #ccc; letter-spacing: 5px; font-size: 14px;}
-        </style>
-    </head>
-    <body>
+# --- 產生 超大按鈕複製元件 ---
+def render_giant_copy_button(text_content):
+    b64_text = base64.b64encode(text_content.encode('utf-8')).decode('utf-8')
+    html_code = f"""
+    <button onclick="copyToClipboard()" style="width:100%; padding:15px; font-size:22px; font-weight:bold; font-family:sans-serif; background-color:#FF4B4B; color:white; border:none; border-radius:8px; cursor:pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: 0.2s;">
+        📋 一鍵複製全文 (可貼至LINE)
+    </button>
+    <script>
+    function copyToClipboard() {{
+        const str = decodeURIComponent(escape(window.atob('{b64_text}')));
+        navigator.clipboard.writeText(str).then(function() {{
+            alert('✅ 複製成功！\\n您可以直接去 LINE 或 Word 貼上了！');
+        }}, function(err) {{
+            alert('❌ 複製失敗，請手動複製。');
+        }});
+    }}
+    </script>
     """
-    for line in text_content.split('\n'):
-        line = line.strip()
-        if not line: continue
-        elif line == SEPARATOR_LINE: html_template += '<div class="separator">◆ &nbsp; ◆ &nbsp; ◆</div>\n'
-        elif line == FOOTNOTE_SEPARATOR: html_template += '<div class="separator">━━━━━━━━━━</div>\n'
-        elif line == FOOTNOTE_TITLE: html_template += f'<div class="footnote-title">{line}</div>\n'
-        elif line in FULL_BIBLE_BOOKS: html_template += f'<div class="book-title">{line}</div>\n'
-        else:
-            match = re.match(r'^(([一-龥]*)\s*(\d+:\d+(?:\s*｜\s*\[[^\]]+\])?))\s+(.*)', line)
-            if match:
-                full_ref = match.group(1)
-                book_part = match.group(2)
-                num_part = match.group(3)
-                text = match.group(4)
-                if "｜" in full_ref:
-                    html_template += f'<div class="footnote"><span class="ref">{full_ref}</span><span class="text">{text}</span></div>\n'
-                else:
-                    html_template += f'<div class="verse"><span class="ref"><span class="ref-book">{book_part} </span>{num_part}</span><span class="text">{text}</span></div>\n'
-            else:
-                html_template += f'<div class="verse">{line}</div>\n'
-    html_template += "</body></html>"
-    return html_template
+    components.html(html_code, height=75)
 
-def render_open_new_tab_button(data_bytes, mime_type, button_text, color_theme="default"):
-    b64_data = base64.b64encode(data_bytes).decode('utf-8')
-    bg_color = "rgb(255, 75, 75)" if color_theme == "primary" else "rgb(255, 255, 255)"
-    text_color = "white" if color_theme == "primary" else "rgb(49, 51, 63)"
-    border = "none" if color_theme == "primary" else "1px solid rgba(49, 51, 63, 0.2)"
-    
-    button_html = f"""
-    <!DOCTYPE html><html><head><style>
-        body {{ margin: 0; padding: 0; font-family: "Source Sans Pro", sans-serif; }}
-        .btn {{
-            display: block; width: 100%; text-align: center; padding: 0.5rem 0;
-            border-radius: 0.5rem; font-size: 18px; font-weight: bold; line-height: 1.6;
-            color: {text_color}; background-color: {bg_color}; border: {border}; 
-            text-decoration: none; box-sizing: border-box; cursor: pointer; transition: all 0.2s ease;
-        }}
-        .btn:hover {{ opacity: 0.8; transform: scale(1.02); }}
-    </style></head><body>
-        <a id="newTabLink" class="btn" target="_blank">{button_text}</a>
-        <script>
-            const str = atob("{b64_data}");
-            const bytes = new Uint8Array(str.length);
-            for (let i = 0; i < str.length; i++) bytes[i] = str.charCodeAt(i);
-            document.getElementById('newTabLink').href = URL.createObjectURL(new Blob([bytes], {{type: "{mime_type}"}}));
-        </script>
-    </body></html>
-    """
-    components.html(button_html, height=55)
-
-# --- 產生 PDF (★ 全面升級：隱形表格 100% 精準對齊) ---
-def generate_pdf(text_content):
+# --- 產生 PDF ---
+def generate_pdf(text_content, font_mult, theme):
     if not HAS_REPORTLAB or not FONT_LOADED: return None
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=50, leftMargin=50, topMargin=50, bottomMargin=50)
     styles = getSampleStyleSheet()
     
-    # 移除原本的 Indent (縮排)，交給 Table 來處理對齊
-    verse_style = ParagraphStyle('VerseStyle', fontName='NotoSansTC', fontSize=14, leading=22, wordWrap='CJK')
-    footnote_style = ParagraphStyle('FootnoteStyle', fontName='NotoSansTC', fontSize=11, leading=17, textColor=HexColor("#555555"), wordWrap='CJK')
+    is_dark = (theme == "dark")
+    c_text = "#E6E6E6" if is_dark else "#282828"
+    c_title = "#87CEFA" if is_dark else "#1F4E79"
+    c_num = "#FF7F7F" if is_dark else "#B22222"
+    c_fn = "#969696" if is_dark else "#555555"
+    c_bg = HexColor("#1E1E1E") if is_dark else HexColor("#FFFFFF")
     
-    title_style = ParagraphStyle('TitleStyle', fontName='NotoSansTC', fontSize=16, leading=24, spaceBefore=20, spaceAfter=8, textColor=HexColor("#1F4E79"))
-    separator_style = ParagraphStyle('SeparatorStyle', fontName='NotoSansTC', fontSize=12, alignment=TA_CENTER, textColor=HexColor("#CCCCCC"), spaceBefore=15, spaceAfter=15)
+    verse_style = ParagraphStyle('VerseStyle', fontName='NotoSansTC', fontSize=14*font_mult, leading=22*font_mult, wordWrap='CJK', textColor=HexColor(c_text))
+    footnote_style = ParagraphStyle('FootnoteStyle', fontName='NotoSansTC', fontSize=11*font_mult, leading=17*font_mult, textColor=HexColor(c_fn), wordWrap='CJK')
+    title_style = ParagraphStyle('TitleStyle', fontName='NotoSansTC', fontSize=16*font_mult, leading=24*font_mult, spaceBefore=20, spaceAfter=8, textColor=HexColor(c_title))
+    separator_style = ParagraphStyle('SeparatorStyle', fontName='NotoSansTC', fontSize=12*font_mult, alignment=TA_CENTER, textColor=HexColor("#888888" if is_dark else "#CCCCCC"), spaceBefore=15, spaceAfter=15)
     
+    left_col_width = 75 * font_mult
+    right_col_width = 495 - left_col_width
+
     story = []
     for line in text_content.split('\n'):
         line = line.strip()
         if not line: continue
-        elif line == SEPARATOR_LINE: 
-            story.append(Paragraph("◆ &nbsp; ◆ &nbsp; ◆", separator_style))
-        elif line == FOOTNOTE_SEPARATOR: 
-            story.append(Spacer(1, 20))
-        elif line == FOOTNOTE_TITLE: 
-            story.append(Paragraph(line, title_style))
+        elif line == SEPARATOR_LINE: story.append(Paragraph("◆ &nbsp; ◆ &nbsp; ◆", separator_style))
+        elif line == FOOTNOTE_SEPARATOR: story.append(Spacer(1, 20))
+        elif line == FOOTNOTE_TITLE: story.append(Paragraph(line, title_style))
         elif line in FULL_BIBLE_BOOKS: 
             story.append(Paragraph(line, title_style))
-            story.append(HRFlowable(width=495, thickness=1.5, color=HexColor("#1F4E79"), spaceBefore=0, spaceAfter=15))
+            story.append(HRFlowable(width=495, thickness=1.5, color=HexColor(c_title), spaceBefore=0, spaceAfter=15))
         elif "｜" in line: 
             parts = line.split(" ｜ ", 1)
             if len(parts) == 2:
-                # 表格排版 (左：章節，右：註解)
-                p_left = Paragraph(f'<font color="#666666"><b>{parts[0]}</b></font>', footnote_style)
+                p_left = Paragraph(f'<font color="{c_fn}"><b>{parts[0]}</b></font>', footnote_style)
                 p_right = Paragraph(parts[1], footnote_style)
-                t = Table([[p_left, p_right]], colWidths=[70, 425])
+                t = Table([[p_left, p_right]], colWidths=[left_col_width, right_col_width])
                 t.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('PADDING', (0,0), (-1,-1), 0), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
                 story.append(t)
             else:
@@ -399,34 +337,44 @@ def generate_pdf(text_content):
         else:
             match = re.match(r'^(([一-龥]*)\s*(\d+:\d+))\s+(.*)', line)
             if match:
-                book_part = match.group(2).strip()
-                num_part = match.group(3).strip()
-                text_part = match.group(4).strip()
-                
+                book_part, num_part, text_part = match.group(2).strip(), match.group(3).strip(), match.group(4).strip()
                 color_str = ""
-                if book_part: color_str += f'<font color="#1F4E79">{book_part}</font> '
-                if num_part: color_str += f'<font color="#B22222">{num_part}</font>'
-                
-                # 表格排版 (左：章節，右：經文內容，完美對齊)
+                if book_part: color_str += f'<font color="{c_title}">{book_part}</font> '
+                if num_part: color_str += f'<font color="{c_num}">{num_part}</font>'
                 p_left = Paragraph(color_str, verse_style)
                 p_right = Paragraph(text_part, verse_style)
-                t = Table([[p_left, p_right]], colWidths=[75, 420])
+                t = Table([[p_left, p_right]], colWidths=[left_col_width, right_col_width])
                 t.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('PADDING', (0,0), (-1,-1), 0), ('BOTTOMPADDING', (0,0), (-1,-1), 10)]))
                 story.append(t)
             else:
                 story.append(Paragraph(line, verse_style))
+                
+    def paint_bg(canvas, doc):
+        canvas.saveState()
+        canvas.setFillColor(c_bg)
+        canvas.rect(0, 0, A4[0], A4[1], fill=1)
+        canvas.restoreState()
+
     try:
-        doc.build(story)
+        doc.build(story, onFirstPage=paint_bg, onLaterPages=paint_bg)
         buffer.seek(0)
         return buffer.getvalue()
     except Exception: return None
 
-# --- 產生圖片 (★ 全面升級：動態測量字高，徹底解決底線重疊) ---
-def generate_image(text_content):
+# --- 產生圖片 ---
+def generate_image(text_content, font_mult, theme):
     if not HAS_PIL or not os.path.exists(FONT_PATH): return None
     
+    is_dark = (theme == "dark")
+    c_bg = (30, 30, 30) if is_dark else (255, 255, 255)
+    c_text = (235, 235, 235) if is_dark else (40, 40, 40)
+    c_title = (135, 206, 250) if is_dark else (31, 78, 121)
+    c_num = (255, 127, 127) if is_dark else (178, 34, 34)
+    c_fn = (150, 150, 150) if is_dark else (100, 100, 100)
+    c_sep = (100, 100, 100) if is_dark else (200, 200, 200)
+
     SCALE = 3 
-    font_size = 20 * SCALE
+    font_size = int(20 * SCALE * font_mult)
     margin = 40 * SCALE 
     max_width = 800 * SCALE
     usable_width = max_width - 2 * margin - (30 * SCALE)
@@ -445,71 +393,46 @@ def generate_image(text_content):
     for line in text_content.split('\n'):
         line = line.strip()
         if not line: continue
-
         if line == FOOTNOTE_SEPARATOR:
-            wrapped_lines.append(("_SPACER_", 0, "spacer", None))
-            wrapped_lines.append(("━━━━━━━━━━━━━", 0, "spacer", None))
-            wrapped_lines.append(("_SPACER_", 0, "spacer", None))
+            wrapped_lines.extend([("_SPACER_",0,"spacer",None), ("━━━━━━━━━━━━━",0,"spacer",None), ("_SPACER_",0,"spacer",None)])
             continue
-
         if line == FOOTNOTE_TITLE or line in FULL_BIBLE_BOOKS:
-            wrapped_lines.append(("_SPACER_", 0, "spacer", None))
-            wrapped_lines.append((line, 0, "title", None))
-            wrapped_lines.append(("_LINE_", 0, "line", None)) 
+            wrapped_lines.extend([("_SPACER_",0,"spacer",None), (line,0,"title",None), ("_LINE_",0,"line",None)])
             continue
-            
         if line == SEPARATOR_LINE:
-            wrapped_lines.append(("_SPACER_", 0, "spacer", None))
-            wrapped_lines.append(("◆   ◆   ◆", 0, "separator", None))
-            wrapped_lines.append(("_SPACER_", 0, "spacer", None))
+            wrapped_lines.extend([("_SPACER_",0,"spacer",None), ("◆   ◆   ◆",0,"separator",None), ("_SPACER_",0,"spacer",None)])
             continue
             
         is_footnote = "｜" in line
         current_font = font_small if is_footnote else font
-
         book_part, num_part = "", ""
         indent_width = 0
         
         match = re.match(r'^(([一-龥]*)\s*(\d+:\d+(?:\s*｜\s*\[[^\]]+\])?))\s+(.*)', line)
         if match:
-            prefix = match.group(1)
-            book_part = match.group(2).strip()
-            num_part = match.group(3).strip()
-            line = match.group(4).strip() 
+            prefix, book_part, num_part, line = match.group(1), match.group(2).strip(), match.group(3).strip(), match.group(4).strip()
             try: indent_width = current_font.getlength(prefix + " ")
             except: indent_width = current_font.getsize(prefix + " ")[0]
-        else:
-            prefix = ""
-
-        current_line = ""
-        is_first_line = True
+            
+        current_line, is_first_line = "", True
         
         for char in line:
             test_line = current_line + char
             try: text_len = current_font.getlength(test_line)
             except: text_len = current_font.getsize(test_line)[0] 
-            
             current_max_width = usable_width if is_first_line else (usable_width - indent_width)
             
             if text_len > current_max_width:
-                if is_first_line:
-                    wrapped_lines.append((current_line, 0, "verse", (book_part, num_part)))
-                    is_first_line = False
-                else:
-                    wrapped_lines.append((current_line, indent_width, "verse_continuation", None))
+                wrapped_lines.append((current_line, 0 if is_first_line else indent_width, "footnote" if is_footnote else "verse", (book_part, num_part) if is_first_line else None))
+                is_first_line = False
                 current_line = char
             else:
                 current_line = test_line
                 
         if current_line:
-            if is_first_line:
-                wrapped_lines.append((current_line, 0, "verse", (book_part, num_part)))
-            else:
-                wrapped_lines.append((current_line, indent_width, "verse_continuation", None))
-                
+            wrapped_lines.append((current_line, 0 if is_first_line else indent_width, "footnote" if is_footnote else "verse", (book_part, num_part) if is_first_line else None))
         wrapped_lines.append(("_VERSE_SPACER_", 0, "spacer", None)) 
 
-    # 粗估高度
     total_height = 2 * margin
     for text, _, l_type, _ in wrapped_lines:
         if l_type == "title": total_height += int(font_size * 2.0)
@@ -517,39 +440,30 @@ def generate_image(text_content):
         elif l_type == "separator": total_height += int(font_size * 1.2)
         elif text == "_SPACER_": total_height += int(font_size * 0.5) 
         elif text == "_VERSE_SPACER_": total_height += inter_verse_spacing 
-        elif is_footnote: total_height += int(font_size * 0.8) + intra_verse_spacing
+        elif l_type == "footnote": total_height += int(font_size * 0.8) + intra_verse_spacing
         else: total_height += font_size + intra_verse_spacing 
         
     total_height += (100 * SCALE) 
             
-    img = Image.new('RGB', (max_width, total_height), color=(255, 255, 255))
+    img = Image.new('RGB', (max_width, total_height), color=c_bg)
     draw = ImageDraw.Draw(img)
     
     y_text = margin
     for text, x_offset, l_type, prefix_data in wrapped_lines:
-        if text == "_SPACER_":
-            y_text += int(font_size * 0.5)
-        elif text == "_VERSE_SPACER_":
-            y_text += inter_verse_spacing
-            
+        if text == "_SPACER_": y_text += int(font_size * 0.5)
+        elif text == "_VERSE_SPACER_": y_text += inter_verse_spacing
         elif l_type == "title":
-            # ★ 關鍵修復：取得字體的絕對像素範圍 (bbox: left, top, right, bottom)
             bbox = draw.textbbox((margin, y_text), text, font=font_title)
-            draw.text((margin, y_text), text, font=font_title, fill=(31, 78, 121))
-            # 直接將 y_text 設定在文字絕對底部，再往下推一點安全距離
+            draw.text((margin, y_text), text, font=font_title, fill=c_title)
             y_text = bbox[3] + int(8 * SCALE)
-            
         elif l_type == "line":
-            # 這時候畫線，絕對不會壓到字
-            draw.line([(margin, y_text), (max_width - margin, y_text)], fill=(31, 78, 121), width=int(2.5*SCALE))
+            draw.line([(margin, y_text), (max_width - margin, y_text)], fill=c_title, width=int(2.5*SCALE))
             y_text += int(15 * SCALE) 
-            
         elif l_type == "separator":
             try: w = font.getlength(text)
             except: w = font.getsize(text)[0]
-            draw.text(((max_width - w) / 2, y_text), text, font=font, fill=(200, 200, 200))
+            draw.text(((max_width - w) / 2, y_text), text, font=font, fill=c_sep)
             y_text += int(font_size * 1.2)
-            
         elif "verse" in l_type or l_type == "footnote":
             is_footnote_line = (l_type == "footnote")
             current_font = font_small if is_footnote_line else font
@@ -558,18 +472,18 @@ def generate_image(text_content):
                 bp, np = prefix_data
                 cur_x = margin
                 if bp: 
-                    draw.text((cur_x, y_text), bp + " ", font=current_font, fill=(100, 100, 100) if is_footnote_line else (31, 78, 121))
+                    draw.text((cur_x, y_text), bp + " ", font=current_font, fill=c_fn if is_footnote_line else c_title)
                     try: w = current_font.getlength(bp + " ")
                     except: w = current_font.getsize(bp + " ")[0]
                     cur_x += w
                 if np: 
-                    draw.text((cur_x, y_text), np + " ", font=current_font, fill=(100, 100, 100) if is_footnote_line else (178, 34, 34))
+                    draw.text((cur_x, y_text), np + " ", font=current_font, fill=c_fn if is_footnote_line else c_num)
                     try: w = current_font.getlength(np + " ")
                     except: w = current_font.getsize(np + " ")[0]
                     cur_x += w
-                draw.text((cur_x, y_text), text, font=current_font, fill=(100, 100, 100) if is_footnote_line else (40, 40, 40))
+                draw.text((cur_x, y_text), text, font=current_font, fill=c_fn if is_footnote_line else c_text)
             else:
-                draw.text((margin + x_offset, y_text), text, font=current_font, fill=(100, 100, 100) if is_footnote_line else (40, 40, 40))
+                draw.text((margin + x_offset, y_text), text, font=current_font, fill=c_fn if is_footnote_line else c_text)
             
             y_text += (int(font_size * 0.8) if is_footnote_line else font_size) + intra_verse_spacing
             
@@ -584,15 +498,31 @@ def generate_image(text_content):
 # --- Streamlit 介面 ---
 st.title("📖 恢復本經節抓取工具")
 
-if "user_input" not in st.session_state: st.session_state.user_input = ""
-if "final_text" not in st.session_state: st.session_state.final_text = ""
+# ★ 接收網址參數 (分享自動觸發)
+if "user_input" not in st.session_state:
+    st.session_state.user_input = st.query_params.get("q", "")
+if "final_text" not in st.session_state:
+    st.session_state.final_text = ""
+
+# 若有網址參數且尚未自動觸發過，設定標記
+auto_trigger = False
+if "q" in st.query_params and not st.session_state.get("auto_triggered", False):
+    st.session_state.auto_triggered = True
+    auto_trigger = True
 
 def clear_text():
     st.session_state.user_input = ""
     st.session_state.final_text = ""
+    st.query_params.clear()
 
-output_mode = st.radio("請選擇輸出排版模式：", options=["模式 1：每節顯示書名簡寫 (例如：可 1:1)", "模式 2：頂部顯示完整書名 (例如：馬可福音)"], index=1, horizontal=False)
-include_footnotes = st.checkbox("📖 包含註解 (經文標示出處，並將完整註解整理於最下方)", value=False)
+with st.expander("⚙️ 輸出與排版設定 (深色模式/大小)", expanded=True):
+    col_a, col_b = st.columns(2)
+    with col_a:
+        output_mode = st.radio("排版模式：", ["模式 1：每節顯示書名簡寫 (例如：可 1:1)", "模式 2：頂部顯示完整書名 (例如：馬可福音)"], index=1)
+        theme_setting = st.radio("配色主題 (適用圖片與PDF)：", ["light (經典白底)", "dark (護眼深色)"], index=0)
+    with col_b:
+        font_size_setting = st.radio("輸出字體大小：", ["標準", "偏大", "特大 (長輩友善)"], index=0)
+        include_footnotes = st.checkbox("📖 包含註解 (附加於最下方)", value=False)
 
 st.markdown("### 🎙️ 請用語音或鍵盤輸入經節")
 user_input = st.text_area("", key="user_input", placeholder="例如：約三15-16，羅馬10/17，加5/6")
@@ -601,12 +531,16 @@ col1, col2 = st.columns([1, 4])
 with col1: btn_start = st.button("🚀 開始抓取", type="primary")
 with col2: st.button("🗑️ 清除內容", on_click=clear_text)
 
-if btn_start:
+# 按下按鈕 或 剛好從網址進入觸發
+if btn_start or auto_trigger:
     if not user_input.strip():
         st.warning("請輸入內容！")
     else:
-        tasks = parse_input_string(user_input)
+        # ★ 更新網址，讓使用者隨時能複製分享
+        st.query_params["q"] = user_input
+        st.success("🔗 網址已更新！您可以直接複製瀏覽器上方網址，傳給朋友點開會自動抓取！")
         
+        tasks = parse_input_string(user_input)
         unique_fetches = set()
         for t in tasks:
             if t['ch_start'] > t['ch_end']: t['ch_end'] = t['ch_start']
@@ -614,7 +548,7 @@ if btn_start:
                 unique_fetches.add((t['no'], current_ch))
         
         if len(unique_fetches) > 40:
-            st.error("⚠️ 一次查詢的章節數量過多（超過 40 章）。為了保護伺服器不崩潰，請分批查詢！")
+            st.error("⚠️ 一次查詢的章節數量過多（超過 40 章）。為了保護伺服器，請分批查詢！")
             st.stop()
 
         st.info(f"⚡ 正在並行抓取 {len(unique_fetches)} 個章節中，請稍候...")
@@ -622,31 +556,23 @@ if btn_start:
         
         results_map = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            future_to_req = {
-                executor.submit(fetch_verse_dict, req[0], req[1], include_footnotes): req 
-                for req in unique_fetches
-            }
+            future_to_req = {executor.submit(fetch_verse_dict, req[0], req[1], include_footnotes): req for req in unique_fetches}
             for i, future in enumerate(concurrent.futures.as_completed(future_to_req)):
                 req = future_to_req[future]  
                 results_map[req] = future.result() 
                 progress_bar.progress((i + 1) / len(unique_fetches))
 
-        final_lines = []
-        all_footnotes_list = [] 
-        current_book_no = None
+        final_lines, all_footnotes_list, current_book_no = [], [], None
         
         for t in tasks:
             for current_ch in range(t['ch_start'], t['ch_end'] + 1):
                 verse_dict = results_map.get((t['no'], current_ch), {})
-                
                 if verse_dict and "error" in verse_dict:
                     st.error(f"抓取 {t['name']} {current_ch} 章時發生錯誤: {verse_dict['error']}")
                     continue
-                    
                 if verse_dict:
                     start_v = t['v_start'] if current_ch == t['ch_start'] else 1
                     end_v = t['v_end'] if current_ch == t['ch_end'] else 999
-                    
                     found_any = False
                     for v in sorted(verse_dict.keys()):
                         if start_v <= v <= end_v:
@@ -655,22 +581,15 @@ if btn_start:
                                 if current_book_no is not None: final_lines.append(SEPARATOR_LINE)
                                 if output_mode.startswith("模式 2"): final_lines.append(BOOK_FULL_MAP.get(t['name'], t['name']))
                                 current_book_no = t['no']
-                            
                             content = verse_dict[v]['text']
                             prefix = f"{t['name']} {current_ch}:{v}" if output_mode.startswith("模式 1") else f"{current_ch}:{v}"
                             final_lines.append(f"{prefix} {content}")
-                                
                             if include_footnotes and verse_dict[v]['footnotes']:
-                                for fn_text in verse_dict[v]['footnotes']:
-                                    all_footnotes_list.append(f"{prefix} ｜ {fn_text}")
-                            
-                    if not found_any:
-                        final_lines.append(f"[{t['name']} {current_ch}:{start_v} 無此節]")
+                                for fn_text in verse_dict[v]['footnotes']: all_footnotes_list.append(f"{prefix} ｜ {fn_text}")
+                    if not found_any: final_lines.append(f"[{t['name']} {current_ch}:{start_v} 無此節]")
 
         if include_footnotes and all_footnotes_list:
-            final_lines.append(FOOTNOTE_SEPARATOR)
-            final_lines.append(FOOTNOTE_TITLE)
-            final_lines.extend(all_footnotes_list)
+            final_lines.extend([FOOTNOTE_SEPARATOR, FOOTNOTE_TITLE] + all_footnotes_list)
 
         if not final_lines: st.error("找不到任何經文，請檢查您的輸入是否正確。")
         else: st.session_state.final_text = "\n".join(final_lines)
@@ -679,25 +598,33 @@ if st.session_state.final_text:
     final_text = st.session_state.final_text
     st.success("🎉 抓取完成！")
     
-    with st.container(height=400): st.code(final_text, language="text")
-    st.write("### 📥 分享與匯出")
-    dl_col1, dl_col2, dl_col3 = st.columns(3)
+    # ★ 超大複製按鈕
+    render_giant_copy_button(final_text)
     
-    with dl_col1: st.download_button("📝 下載純文字", data=final_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
-    with dl_col2: render_open_new_tab_button(generate_html(final_text).encode('utf-8'), "text/html", "🌐 網頁 / 圖片版", color_theme="primary")
+    with st.container(height=350): st.code(final_text, language="text")
+    
+    font_mult = {"標準": 1.0, "偏大": 1.25, "特大 (長輩友善)": 1.5}[font_size_setting]
+    theme_val = "dark" if theme_setting.startswith("dark") else "light"
+    
+    st.write("### 📥 分享與匯出 (圖片 / PDF)")
+    st.markdown('<div class="img-instruction">💡 若在 LINE 裡無法長按圖片，請直接點擊下方「📥 直接下載圖片」按鈕！</div>', unsafe_allow_html=True)
+    
+    img_data = generate_image(final_text, font_mult, theme_val) if HAS_PIL else None
+    
+    dl_col1, dl_col2, dl_col3 = st.columns(3)
+    with dl_col1:
+        if img_data: st.download_button("📥 直接下載圖片 (.png)", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True, type="primary")
+        else: st.button("🖼️ 缺圖片套件", disabled=True, use_container_width=True)
+    with dl_col2: st.download_button("📝 下載純文字 (.txt)", data=final_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
     with dl_col3:
         if HAS_REPORTLAB and FONT_LOADED:
-            pdf_data = generate_pdf(final_text)
-            if pdf_data: st.download_button("📄 下載 PDF", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
+            pdf_data = generate_pdf(final_text, font_mult, theme_val)
+            if pdf_data: st.download_button("📄 下載 PDF (.pdf)", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
             else: st.button("📄 PDF (錯誤)", disabled=True, use_container_width=True)
         else: st.button("📄 缺字型", disabled=True, use_container_width=True)
 
     st.write("---")
-    if HAS_PIL and os.path.exists(FONT_PATH):
-        st.markdown('<div class="img-instruction">👇 手機/平板請「長按圖片」分享，電腦請「按右鍵」另存 👇</div>', unsafe_allow_html=True)
-        with st.spinner('🎨 正在繪製精美高畫質長圖...'):
-            img_data = generate_image(final_text)
-            if img_data:
-                b64_img = base64.b64encode(img_data).decode('utf-8')
-                st.markdown(f'<img src="data:image/png;base64,{b64_img}" style="width: 100%; border: 1px solid #ccc; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">', unsafe_allow_html=True)
-            else: st.error("圖片繪製失敗。")
+    if img_data:
+        b64_img = base64.b64encode(img_data).decode('utf-8')
+        # ★ 加入 CSS 防止 LINE 阻擋長按手勢
+        st.markdown(f'<img src="data:image/png;base64,{b64_img}" style="width: 100%; border: 1px solid #ccc; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); -webkit-touch-callout: default; pointer-events: auto;">', unsafe_allow_html=True)
