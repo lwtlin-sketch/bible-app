@@ -7,6 +7,7 @@ import time
 import io
 import os
 import base64
+import concurrent.futures  # ★ 新增：用於多執行緒加速
 
 # --- 嘗試載入 PDF 套件 ---
 try:
@@ -18,7 +19,7 @@ try:
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.enums import TA_CENTER
     from reportlab.lib.colors import HexColor
-    from reportlab.lib.fonts import addMapping # ★ 補回遺失的 addMapping ★
+    from reportlab.lib.fonts import addMapping
     HAS_REPORTLAB = True
 except ImportError:
     HAS_REPORTLAB = False
@@ -200,14 +201,14 @@ def parse_input_string(input_str):
         })
     return parsed_items
 
-# --- API 抓取函式 ---
+# --- API 抓取函式 (★ 引入 Streamlit 記憶體快取 @st.cache_data) ---
+@st.cache_data(ttl=86400, show_spinner=False)
 def fetch_footnotes_db(book_no, chapter):
     url = f"https://www.recoveryversion.com.tw/api/getFoots?VERSION=1&chapter_code={book_no}&section_code={chapter}"
     try:
         headers = {
-            'Accept': '*/*', 'Accept-Language': 'zh-TW,zh;q=0.9',
-            'Origin': 'https://recoveryversion.twgbr.org', 'Referer': 'https://recoveryversion.twgbr.org/',
-            'User-Agent': 'Mozilla/5.0'
+            'Accept': '*/*', 'Origin': 'https://recoveryversion.twgbr.org', 
+            'Referer': 'https://recoveryversion.twgbr.org/', 'User-Agent': 'Mozilla/5.0'
         }
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
@@ -220,14 +221,19 @@ def fetch_footnotes_db(book_no, chapter):
                     content = content.replace('<br>', ' ').replace('<br/>', ' ').replace('ˍ', ' ')
                     fn_dict[v_num][str(n_num)] = re.sub(r'<[^>]+>', '', content)
             return fn_dict
-    except: pass
+    except Exception as e:
+        return {"error": str(e)}
     return {}
 
-def fetch_verse_dict(book_no, chapter, include_footnotes=False):
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_verse_dict(book_no, chapter, include_footnotes):
     query = f"?VERSION=1&output[]=content&output[]=unit_code&output[]=segment_code&chapter_code={book_no}&section_code={chapter}&ORDER=id"
     url = f"https://www.recoveryversion.com.tw/api/getVerses{query}"
     fn_db = fetch_footnotes_db(book_no, chapter) if include_footnotes else {}
     
+    if fn_db and "error" in fn_db:
+        return {"error": f"註解抓取異常: {fn_db['error']}"}
+
     try:
         headers = {
             'Accept': '*/*', 'Origin': 'https://recoveryversion.twgbr.org', 
@@ -240,7 +246,7 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
             for key in data:
                 if isinstance(data[key], list):
                     items = data[key]; break
-        if not items: return {"error": "伺服器回傳空資料"}
+        if not items: return {"error": "伺服器回傳空資料 (該章節可能不存在)"}
         
         verse_dict = {}
         for item in items:
@@ -334,11 +340,6 @@ def render_open_new_tab_button(data_bytes, mime_type, button_text, color_theme="
             text-decoration: none; box-sizing: border-box; cursor: pointer; transition: all 0.2s ease;
         }}
         .btn:hover {{ opacity: 0.8; transform: scale(1.02); }}
-        @media (prefers-color-scheme: dark) {{
-            .btn:not([style*="rgb(255, 75, 75)"]) {{
-                color: rgb(250, 250, 250); background-color: rgb(14, 17, 23); border-color: rgba(250, 250, 250, 0.2);
-            }}
-        }}
     </style></head><body>
         <a id="newTabLink" class="btn" target="_blank">{button_text}</a>
         <script>
@@ -396,7 +397,7 @@ def generate_pdf(text_content):
         return buffer.getvalue()
     except Exception: return None
 
-# --- ★ 圖片引擎 (PIL) 強制防切斷與防重疊升級版 ★ ---
+# --- 產生圖片 (★ 完美修復排版重疊問題) ---
 def generate_image(text_content):
     if not HAS_PIL or not os.path.exists(FONT_PATH): return None
     
@@ -405,8 +406,6 @@ def generate_image(text_content):
     line_spacing = 10 * SCALE
     margin = 50 * SCALE
     max_width = 800 * SCALE
-    
-    # ★ 關鍵修復 1：右側保留超大安全區(減去 60 像素)，防止字型寬度誤差導致衝出右邊界
     usable_width = max_width - 2 * margin - (30 * SCALE)
     
     try: 
@@ -485,18 +484,18 @@ def generate_image(text_content):
                 
         wrapped_lines.append(("_VERSE_SPACER_", 0, "spacer", None)) 
 
-    # ★ 關鍵修復 2：重新精確計算高度，並在最下方加上 200 像素的防切斷留白
+    # ★ 同步計算精準高度，根絕任何重疊
     total_height = 2 * margin
     for text, _, l_type, _ in wrapped_lines:
-        if text == "_SPACER_": total_height += int(font_size * 0.8)
+        if l_type == "title": total_height += int(font_size * 1.8)
+        elif l_type == "line": total_height += int(font_size * 1.0) 
+        elif l_type == "separator": total_height += int(font_size * 1.5)
+        elif text == "_SPACER_": total_height += int(font_size * 0.8)
         elif text == "_VERSE_SPACER_": total_height += int(font_size * 0.6) 
-        elif l_type == "title": total_height += int(font_size * 1.3)
-        elif l_type == "line": total_height += int(font_size * 1.5) 
-        elif l_type == "separator": total_height += font_size
         elif l_type == "footnote": total_height += int(font_size * 0.8) + line_spacing
         else: total_height += font_size + line_spacing
         
-    total_height += (200 * SCALE) # 底部超大安全緩衝區，保證絕不切字
+    total_height += (150 * SCALE) # 底部緩衝區
             
     img = Image.new('RGB', (max_width, total_height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
@@ -505,27 +504,22 @@ def generate_image(text_content):
     for text, x_offset, l_type, prefix_data in wrapped_lines:
         if text == "_SPACER_":
             y_text += int(font_size * 0.8)
-            continue
-        if text == "_VERSE_SPACER_":
+        elif text == "_VERSE_SPACER_":
             y_text += int(font_size * 0.6)
-            continue
             
-        if l_type == "title":
+        elif l_type == "title":
             draw.text((margin, y_text), text, font=font_title, fill=(31, 78, 121))
-            # ★ 關鍵修復 3：捨棄 textbbox，直接用絕對字高往下推 1.5 倍的距離再畫線
-            last_title_bottom_y = y_text + int(font_size * 1.5)
-            y_text += int(font_size * 1.3)
+            y_text += int(font_size * 1.8) # 為底線留出足夠空間
             
         elif l_type == "line":
-            line_y = last_title_bottom_y
-            draw.line([(margin, line_y), (max_width - margin, line_y)], fill=(31, 78, 121), width=int(2.5*SCALE))
-            y_text = line_y + (15 * SCALE) # 畫完線後往下推，準備印第一行字
+            draw.line([(margin, y_text), (max_width - margin, y_text)], fill=(31, 78, 121), width=int(2.5*SCALE))
+            y_text += int(font_size * 1.0) # 底線下方的留白
             
         elif l_type == "separator":
             try: w = font.getlength(text)
             except: w = font.getsize(text)[0]
             draw.text(((max_width - w) / 2, y_text), text, font=font, fill=(200, 200, 200))
-            y_text += font_size
+            y_text += int(font_size * 1.5)
             
         elif l_type == "footnote":
             if prefix_data: 
@@ -559,46 +553,29 @@ def generate_image(text_content):
                 draw.text((margin + x_offset, y_text), text, font=current_font, fill=(40, 40, 40))
             y_text += font_size + line_spacing
             
-    # 如果圖片長度超過一定限度，為防止手機瀏覽器無法載入，進行安全縮小
-    if total_height > 18000:
-        SCALE_DOWN = 2
-    else:
-        SCALE_DOWN = SCALE
+    if total_height > 20000: SCALE_DOWN = 2
+    else: SCALE_DOWN = SCALE
         
     img = img.resize((max_width // SCALE_DOWN, total_height // SCALE_DOWN), Image.Resampling.LANCZOS)
     buffer = io.BytesIO()
     img.save(buffer, format="PNG", optimize=True)
     return buffer.getvalue()
 
-
 # --- Streamlit 介面 ---
 st.title("📖 恢復本經節抓取工具")
 
-if "user_input" not in st.session_state:
-    st.session_state.user_input = ""
-if "final_text" not in st.session_state:
-    st.session_state.final_text = ""
+if "user_input" not in st.session_state: st.session_state.user_input = ""
+if "final_text" not in st.session_state: st.session_state.final_text = ""
 
 def clear_text():
     st.session_state.user_input = ""
     st.session_state.final_text = ""
 
-output_mode = st.radio(
-    "請選擇輸出排版模式：",
-    options=["模式 1：每節顯示書名簡寫 (例如：可 1:1)", "模式 2：頂部顯示完整書名 (例如：馬可福音)"],
-    index=1, horizontal=False 
-)
-
+output_mode = st.radio("請選擇輸出排版模式：", options=["模式 1：每節顯示書名簡寫 (例如：可 1:1)", "模式 2：頂部顯示完整書名 (例如：馬可福音)"], index=1, horizontal=False)
 include_footnotes = st.checkbox("📖 包含註解 (經文標示出處，並將完整註解整理於最下方)", value=False)
 
 st.markdown("### 🎙️ 請用語音或鍵盤輸入經節")
-st.markdown("*提示：輸入完畢後，請直接點擊下方的 **「🚀 開始抓取」** 按鈕。*")
-
-user_input = st.text_area(
-    "", 
-    key="user_input", 
-    placeholder="例如：馬可福音一章一到五節"
-)
+user_input = st.text_area("", key="user_input", placeholder="例如：馬可福音一章一到五節，約翰福音三章十六節")
 
 col1, col2 = st.columns([1, 4])
 with col1: btn_start = st.button("🚀 開始抓取", type="primary")
@@ -608,100 +585,100 @@ if btn_start:
     if not user_input.strip():
         st.warning("請輸入內容！")
     else:
-        st.info("正在透過 API 抓取中，請稍候...")
-        progress_bar = st.progress(0)
         tasks = parse_input_string(user_input)
         
+        # 建立請求清單
+        fetch_jobs = []
+        for t in tasks:
+            if t['ch_start'] > t['ch_end']: t['ch_end'] = t['ch_start']
+            for current_ch in range(t['ch_start'], t['ch_end'] + 1):
+                fetch_jobs.append((t, current_ch))
+        
+        # ★ 防呆機制：限制最大查詢量
+        if len(fetch_jobs) > 40:
+            st.error("⚠️ 一次查詢的章節數量過多（超過 40 章）。為了保護伺服器不崩潰，請分批查詢！")
+            st.stop()
+
+        st.info(f"⚡ 正在並行抓取 {len(fetch_jobs)} 個章節中，請稍候...")
+        progress_bar = st.progress(0)
+        
+        # ★ 多執行緒並行抓取
+        results_map = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_job = {executor.submit(fetch_verse_dict, job[0]['no'], job[1], include_footnotes): job for job in fetch_jobs}
+            for i, future in enumerate(concurrent.futures.as_completed(future_to_job)):
+                job = future_to_job[future]
+                results_map[job] = future.result()
+                progress_bar.progress((i + 1) / len(fetch_jobs))
+
         final_lines = []
         all_footnotes_list = [] 
         current_book_no = None
-        total_tasks = len(tasks)
         
-        for i, t in enumerate(tasks):
-            progress_bar.progress((i + 1) / total_tasks)
-            if t['ch_start'] > t['ch_end']: t['ch_end'] = t['ch_start']
+        # 依照原本輸入順序重組文字
+        for job in fetch_jobs:
+            t, current_ch = job
+            verse_dict = results_map.get(job, {})
             
-            for current_ch in range(t['ch_start'], t['ch_end'] + 1):
-                verse_dict = fetch_verse_dict(t['no'], current_ch, include_footnotes)
-                if verse_dict and "error" in verse_dict:
-                    st.error(f"抓取 {t['name']} {current_ch} 章時發生錯誤: {verse_dict['error']}")
-                    continue
+            if verse_dict and "error" in verse_dict:
+                st.error(f"抓取 {t['name']} {current_ch} 章時發生錯誤: {verse_dict['error']}")
+                continue
                 
-                if verse_dict:
-                    start_v = t['v_start'] if current_ch == t['ch_start'] else 1
-                    end_v = t['v_end'] if current_ch == t['ch_end'] else 999
-                    
-                    found_any = False
-                    for v in sorted(verse_dict.keys()):
-                        if start_v <= v <= end_v:
-                            found_any = True
+            if verse_dict:
+                start_v = t['v_start'] if current_ch == t['ch_start'] else 1
+                end_v = t['v_end'] if current_ch == t['ch_end'] else 999
+                
+                found_any = False
+                for v in sorted(verse_dict.keys()):
+                    if start_v <= v <= end_v:
+                        found_any = True
+                        if t['no'] != current_book_no:
+                            if current_book_no is not None: final_lines.append(SEPARATOR_LINE)
+                            if output_mode.startswith("模式 2"): final_lines.append(BOOK_FULL_MAP.get(t['name'], t['name']))
+                            current_book_no = t['no']
+                        
+                        content = verse_dict[v]['text']
+                        prefix = f"{t['name']} {current_ch}:{v}" if output_mode.startswith("模式 1") else f"{current_ch}:{v}"
+                        final_lines.append(f"{prefix} {content}")
                             
-                            if t['no'] != current_book_no:
-                                if current_book_no is not None:
-                                    final_lines.append(SEPARATOR_LINE)
-                                if output_mode.startswith("模式 2"):
-                                    final_lines.append(BOOK_FULL_MAP.get(t['name'], t['name']))
-                                current_book_no = t['no']
-                            
-                            content = verse_dict[v]['text']
-                            prefix = f"{t['name']} {current_ch}:{v}" if output_mode.startswith("模式 1") else f"{current_ch}:{v}"
-                            final_lines.append(f"{prefix} {content}")
-                                
-                            if include_footnotes and verse_dict[v]['footnotes']:
-                                for fn_text in verse_dict[v]['footnotes']:
-                                    all_footnotes_list.append(f"{prefix} ｜ {fn_text}")
-                            
-                    if not found_any:
-                        final_lines.append(f"[{t['name']} {current_ch}:{start_v} 無此節]")
-                time.sleep(0.1) 
+                        if include_footnotes and verse_dict[v]['footnotes']:
+                            for fn_text in verse_dict[v]['footnotes']:
+                                all_footnotes_list.append(f"{prefix} ｜ {fn_text}")
+                        
+                if not found_any:
+                    final_lines.append(f"[{t['name']} {current_ch}:{start_v} 無此節]")
 
         if include_footnotes and all_footnotes_list:
             final_lines.append(FOOTNOTE_SEPARATOR)
             final_lines.append(FOOTNOTE_TITLE)
             final_lines.extend(all_footnotes_list)
 
-        if not final_lines:
-            st.error("找不到任何經文，請檢查您的輸入是否正確。")
-        else:
-            st.session_state.final_text = "\n".join(final_lines)
+        if not final_lines: st.error("找不到任何經文，請檢查您的輸入是否正確。")
+        else: st.session_state.final_text = "\n".join(final_lines)
 
 if st.session_state.final_text:
     final_text = st.session_state.final_text
     st.success("🎉 抓取完成！")
     
-    with st.container(height=400):
-        st.code(final_text, language="text")
-    
+    with st.container(height=400): st.code(final_text, language="text")
     st.write("### 📥 分享與匯出")
-    
     dl_col1, dl_col2, dl_col3 = st.columns(3)
     
-    with dl_col1:
-        st.download_button("📝 下載純文字 (.txt)", data=final_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
-        
-    with dl_col2:
-        html_data = generate_html(final_text)
-        render_open_new_tab_button(html_data.encode('utf-8'), "text/html", "🌐 網頁 / 圖片版", color_theme="primary")
-    
+    with dl_col1: st.download_button("📝 下載純文字", data=final_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
+    with dl_col2: render_open_new_tab_button(generate_html(final_text).encode('utf-8'), "text/html", "🌐 網頁 / 圖片版", color_theme="primary")
     with dl_col3:
         if HAS_REPORTLAB and FONT_LOADED:
             pdf_data = generate_pdf(final_text)
-            if pdf_data:
-                st.download_button("📄 下載 PDF (.pdf)", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
-            else:
-                st.button("📄 PDF (錯誤)", disabled=True, use_container_width=True)
-        else:
-            st.button("📄 缺字型", disabled=True, use_container_width=True)
+            if pdf_data: st.download_button("📄 下載 PDF", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
+            else: st.button("📄 PDF (錯誤)", disabled=True, use_container_width=True)
+        else: st.button("📄 缺字型", disabled=True, use_container_width=True)
 
     st.write("---")
-    
     if HAS_PIL and os.path.exists(FONT_PATH):
-        st.markdown('<div class="img-instruction">👇 手機/平板請「長按圖片」分享至 LINE，電腦請「按右鍵」另存圖片 👇</div>', unsafe_allow_html=True)
-        
-        with st.spinner('正在繪製精美高畫質長圖...'):
+        st.markdown('<div class="img-instruction">👇 手機/平板請「長按圖片」分享，電腦請「按右鍵」另存 👇</div>', unsafe_allow_html=True)
+        with st.spinner('🎨 正在繪製精美高畫質長圖...'):
             img_data = generate_image(final_text)
             if img_data:
                 b64_img = base64.b64encode(img_data).decode('utf-8')
                 st.markdown(f'<img src="data:image/png;base64,{b64_img}" style="width: 100%; border: 1px solid #ccc; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">', unsafe_allow_html=True)
-            else:
-                st.error("圖片繪製失敗，請確認字型檔案是否正確。")
+            else: st.error("圖片繪製失敗。")
