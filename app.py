@@ -221,7 +221,7 @@ def fetch_footnotes_db(book_no, chapter):
                     content = content.replace('<br>', ' ').replace('<br/>', ' ').replace('ˍ', ' ')
                     fn_dict[v_num][str(n_num)] = re.sub(r'<[^>]+>', '', content)
             return fn_dict
-    except Exception as e: return {"error": str(e)}
+    except Exception: pass
     return {}
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -229,7 +229,6 @@ def fetch_verse_dict(book_no, chapter, include_footnotes):
     query = f"?VERSION=1&output[]=content&output[]=unit_code&output[]=segment_code&chapter_code={book_no}&section_code={chapter}&ORDER=id"
     url = f"https://www.recoveryversion.com.tw/api/getVerses{query}"
     fn_db = fetch_footnotes_db(book_no, chapter) if include_footnotes else {}
-    
     if fn_db and "error" in fn_db: return {"error": f"註解抓取異常: {fn_db['error']}"}
 
     try:
@@ -256,7 +255,6 @@ def fetch_verse_dict(book_no, chapter, include_footnotes):
             if v_num > 0 and content_html:
                 soup = BeautifulSoup(content_html, 'html.parser')
                 paired_footnotes = []
-                
                 if include_footnotes:
                     for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c): popup.decompose()
                     if v_num in fn_db:
@@ -267,7 +265,6 @@ def fetch_verse_dict(book_no, chapter, include_footnotes):
                 else:
                     for sup in soup.find_all('sup'): sup.decompose()
                     for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c): popup.decompose()
-                    
                 verse_dict[v_num] = {'text': soup.get_text(separator='', strip=True), 'footnotes': paired_footnotes}
         return verse_dict
     except Exception as e: return {"error": f"連線錯誤: {str(e)}"}
@@ -291,6 +288,94 @@ def render_giant_copy_button(text_content):
     </script>
     """
     components.html(html_code, height=75)
+
+# --- 產生 網頁版 HTML (★ 支援深色模式與放大) ---
+def generate_html(text_content, font_mult, theme):
+    is_dark = (theme == "dark")
+    bg_col = "#1E1E1E" if is_dark else "#ffffff"
+    text_col = "#E6E6E6" if is_dark else "#333333"
+    title_col = "#87CEFA" if is_dark else "#1F4E79"
+    num_col = "#FF7F7F" if is_dark else "#B22222"
+    fn_col = "#969696" if is_dark else "#555555"
+    sep_col = "#888888" if is_dark else "#CCCCCC"
+    
+    base_size = int(18 * font_mult)
+    title_size = int(24 * font_mult)
+    fn_size = int(15 * font_mult)
+
+    html_template = f"""
+    <!DOCTYPE html>
+    <html lang="zh-TW">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>經節抓取結果</title>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
+            body {{ font-family: 'Noto Sans TC', sans-serif; line-height: 1.8; color: {text_col}; max-width: 800px; margin: 0 auto; padding: 40px 20px; background-color: {bg_col}; }}
+            .book-title {{ color: {title_col}; font-size: {title_size}px; font-weight: 700; margin-top: 40px; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid {title_col}; }}
+            .verse, .footnote {{ display: flex; text-align: justify; margin-bottom: 12px; }}
+            .verse {{ font-size: {base_size}px; }}
+            .verse .ref {{ flex-shrink: 0; margin-right: 6px; color: {num_col}; font-weight: bold; }}
+            .verse .ref-book {{ color: {title_col}; }}
+            .footnote-title {{ font-size: {int(20*font_mult)}px; font-weight: bold; color: {title_col}; text-align: center; margin-top: 50px; margin-bottom: 20px; }}
+            .footnote {{ font-size: {fn_size}px; color: {fn_col}; }}
+            .footnote .ref {{ flex-shrink: 0; margin-right: 8px; color: {fn_col}; font-weight: bold; }}
+            .separator {{ text-align: center; margin: 40px 0; color: {sep_col}; letter-spacing: 5px; font-size: {int(14*font_mult)}px;}}
+        </style>
+    </head>
+    <body>
+    """
+    for line in text_content.split('\n'):
+        line = line.strip()
+        if not line: continue
+        elif line == SEPARATOR_LINE: html_template += '<div class="separator">◆ &nbsp; ◆ &nbsp; ◆</div>\n'
+        elif line == FOOTNOTE_SEPARATOR: html_template += '<div class="separator">━━━━━━━━━━</div>\n'
+        elif line == FOOTNOTE_TITLE: html_template += f'<div class="footnote-title">{line}</div>\n'
+        elif line in FULL_BIBLE_BOOKS: html_template += f'<div class="book-title">{line}</div>\n'
+        else:
+            match = re.match(r'^(([一-龥]*)\s*(\d+:\d+(?:\s*｜\s*\[[^\]]+\])?))\s+(.*)', line)
+            if match:
+                full_ref, book_part, num_part, text = match.group(1), match.group(2), match.group(3), match.group(4)
+                if "｜" in full_ref:
+                    html_template += f'<div class="footnote"><span class="ref">{full_ref}</span><span class="text">{text}</span></div>\n'
+                else:
+                    html_template += f'<div class="verse"><span class="ref"><span class="ref-book">{book_part} </span>{num_part}</span><span class="text">{text}</span></div>\n'
+            else:
+                html_template += f'<div class="verse">{line}</div>\n'
+    html_template += "</body></html>"
+    return html_template
+
+def render_open_new_tab_button(data_bytes, mime_type, button_text, color_theme="default"):
+    b64_data = base64.b64encode(data_bytes).decode('utf-8')
+    bg_color = "rgb(255, 75, 75)" if color_theme == "primary" else "rgb(255, 255, 255)"
+    text_color = "white" if color_theme == "primary" else "rgb(49, 51, 63)"
+    border = "none" if color_theme == "primary" else "1px solid rgba(49, 51, 63, 0.2)"
+    
+    button_html = f"""
+    <!DOCTYPE html><html><head><style>
+        body {{ margin: 0; padding: 0; font-family: "Source Sans Pro", sans-serif; }}
+        .btn {{
+            display: block; width: 100%; text-align: center; padding: 0.5rem 0;
+            border-radius: 0.5rem; font-size: 18px; font-weight: bold; line-height: 1.6;
+            color: {text_color}; background-color: {bg_color}; border: {border}; 
+            text-decoration: none; box-sizing: border-box; cursor: pointer; transition: all 0.2s ease;
+        }}
+        .btn:hover {{ opacity: 0.8; transform: scale(1.02); }}
+        @media (prefers-color-scheme: dark) {{
+            .btn:not([style*="rgb(255, 75, 75)"]) {{ color: rgb(250, 250, 250); background-color: rgb(14, 17, 23); border-color: rgba(250, 250, 250, 0.2); }}
+        }}
+    </style></head><body>
+        <a id="newTabLink" class="btn" target="_blank">{button_text}</a>
+        <script>
+            const str = atob("{b64_data}");
+            const bytes = new Uint8Array(str.length);
+            for (let i = 0; i < str.length; i++) bytes[i] = str.charCodeAt(i);
+            document.getElementById('newTabLink').href = URL.createObjectURL(new Blob([bytes], {{type: "{mime_type}"}}));
+        </script>
+    </body></html>
+    """
+    components.html(button_html, height=55)
 
 # --- 產生 PDF ---
 def generate_pdf(text_content, font_mult, theme):
@@ -389,7 +474,6 @@ def generate_image(text_content, font_mult, theme):
     except Exception: return None 
 
     wrapped_lines = [] 
-    
     for line in text_content.split('\n'):
         line = line.strip()
         if not line: continue
@@ -415,13 +499,11 @@ def generate_image(text_content, font_mult, theme):
             except: indent_width = current_font.getsize(prefix + " ")[0]
             
         current_line, is_first_line = "", True
-        
         for char in line:
             test_line = current_line + char
             try: text_len = current_font.getlength(test_line)
             except: text_len = current_font.getsize(test_line)[0] 
             current_max_width = usable_width if is_first_line else (usable_width - indent_width)
-            
             if text_len > current_max_width:
                 wrapped_lines.append((current_line, 0 if is_first_line else indent_width, "footnote" if is_footnote else "verse", (book_part, num_part) if is_first_line else None))
                 is_first_line = False
@@ -442,7 +524,6 @@ def generate_image(text_content, font_mult, theme):
         elif text == "_VERSE_SPACER_": total_height += inter_verse_spacing 
         elif l_type == "footnote": total_height += int(font_size * 0.8) + intra_verse_spacing
         else: total_height += font_size + intra_verse_spacing 
-        
     total_height += (100 * SCALE) 
             
     img = Image.new('RGB', (max_width, total_height), color=c_bg)
@@ -467,7 +548,6 @@ def generate_image(text_content, font_mult, theme):
         elif "verse" in l_type or l_type == "footnote":
             is_footnote_line = (l_type == "footnote")
             current_font = font_small if is_footnote_line else font
-            
             if prefix_data: 
                 bp, np = prefix_data
                 cur_x = margin
@@ -484,7 +564,6 @@ def generate_image(text_content, font_mult, theme):
                 draw.text((cur_x, y_text), text, font=current_font, fill=c_fn if is_footnote_line else c_text)
             else:
                 draw.text((margin + x_offset, y_text), text, font=current_font, fill=c_fn if is_footnote_line else c_text)
-            
             y_text += (int(font_size * 0.8) if is_footnote_line else font_size) + intra_verse_spacing
             
     if total_height > 20000: SCALE_DOWN = 2
@@ -498,13 +577,11 @@ def generate_image(text_content, font_mult, theme):
 # --- Streamlit 介面 ---
 st.title("📖 恢復本經節抓取工具")
 
-# ★ 接收網址參數 (分享自動觸發)
 if "user_input" not in st.session_state:
     st.session_state.user_input = st.query_params.get("q", "")
 if "final_text" not in st.session_state:
     st.session_state.final_text = ""
 
-# 若有網址參數且尚未自動觸發過，設定標記
 auto_trigger = False
 if "q" in st.query_params and not st.session_state.get("auto_triggered", False):
     st.session_state.auto_triggered = True
@@ -519,7 +596,7 @@ with st.expander("⚙️ 輸出與排版設定 (深色模式/大小)", expanded=
     col_a, col_b = st.columns(2)
     with col_a:
         output_mode = st.radio("排版模式：", ["模式 1：每節顯示書名簡寫 (例如：可 1:1)", "模式 2：頂部顯示完整書名 (例如：馬可福音)"], index=1)
-        theme_setting = st.radio("配色主題 (適用圖片與PDF)：", ["light (經典白底)", "dark (護眼深色)"], index=0)
+        theme_setting = st.radio("配色主題 (適用圖片、PDF與網頁)：", ["light (經典白底)", "dark (護眼深色)"], index=0)
     with col_b:
         font_size_setting = st.radio("輸出字體大小：", ["標準", "偏大", "特大 (長輩友善)"], index=0)
         include_footnotes = st.checkbox("📖 包含註解 (附加於最下方)", value=False)
@@ -531,12 +608,10 @@ col1, col2 = st.columns([1, 4])
 with col1: btn_start = st.button("🚀 開始抓取", type="primary")
 with col2: st.button("🗑️ 清除內容", on_click=clear_text)
 
-# 按下按鈕 或 剛好從網址進入觸發
 if btn_start or auto_trigger:
     if not user_input.strip():
         st.warning("請輸入內容！")
     else:
-        # ★ 更新網址，讓使用者隨時能複製分享
         st.query_params["q"] = user_input
         st.success("🔗 網址已更新！您可以直接複製瀏覽器上方網址，傳給朋友點開會自動抓取！")
         
@@ -563,7 +638,6 @@ if btn_start or auto_trigger:
                 progress_bar.progress((i + 1) / len(unique_fetches))
 
         final_lines, all_footnotes_list, current_book_no = [], [], None
-        
         for t in tasks:
             for current_ch in range(t['ch_start'], t['ch_end'] + 1):
                 verse_dict = results_map.get((t['no'], current_ch), {})
@@ -598,7 +672,6 @@ if st.session_state.final_text:
     final_text = st.session_state.final_text
     st.success("🎉 抓取完成！")
     
-    # ★ 超大複製按鈕
     render_giant_copy_button(final_text)
     
     with st.container(height=350): st.code(final_text, language="text")
@@ -606,25 +679,28 @@ if st.session_state.final_text:
     font_mult = {"標準": 1.0, "偏大": 1.25, "特大 (長輩友善)": 1.5}[font_size_setting]
     theme_val = "dark" if theme_setting.startswith("dark") else "light"
     
-    st.write("### 📥 分享與匯出 (圖片 / PDF)")
-    st.markdown('<div class="img-instruction">💡 若在 LINE 裡無法長按圖片，請直接點擊下方「📥 直接下載圖片」按鈕！</div>', unsafe_allow_html=True)
+    st.write("### 📥 分享與匯出 (圖片 / PDF / 網頁版)")
+    st.markdown('<div class="img-instruction">💡 若在 LINE 裡無法長按圖片，請直接點擊下方「📥 下載圖片」按鈕！</div>', unsafe_allow_html=True)
     
     img_data = generate_image(final_text, font_mult, theme_val) if HAS_PIL else None
     
-    dl_col1, dl_col2, dl_col3 = st.columns(3)
+    # ★ 將匯出按鈕區塊擴充為 4 個，並將網頁版加回來！
+    dl_col1, dl_col2, dl_col3, dl_col4 = st.columns(4)
     with dl_col1:
-        if img_data: st.download_button("📥 直接下載圖片 (.png)", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True, type="primary")
+        if img_data: st.download_button("📥 下載圖片", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True, type="primary")
         else: st.button("🖼️ 缺圖片套件", disabled=True, use_container_width=True)
-    with dl_col2: st.download_button("📝 下載純文字 (.txt)", data=final_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
-    with dl_col3:
+    with dl_col2:
+        render_open_new_tab_button(generate_html(final_text, font_mult, theme_val).encode('utf-8'), "text/html", "🌐 網頁版(另開)", color_theme="default")
+    with dl_col3: 
+        st.download_button("📝 下載純文字", data=final_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
+    with dl_col4:
         if HAS_REPORTLAB and FONT_LOADED:
             pdf_data = generate_pdf(final_text, font_mult, theme_val)
-            if pdf_data: st.download_button("📄 下載 PDF (.pdf)", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
+            if pdf_data: st.download_button("📄 下載 PDF", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
             else: st.button("📄 PDF (錯誤)", disabled=True, use_container_width=True)
         else: st.button("📄 缺字型", disabled=True, use_container_width=True)
 
     st.write("---")
     if img_data:
         b64_img = base64.b64encode(img_data).decode('utf-8')
-        # ★ 加入 CSS 防止 LINE 阻擋長按手勢
         st.markdown(f'<img src="data:image/png;base64,{b64_img}" style="width: 100%; border: 1px solid #ccc; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); -webkit-touch-callout: default; pointer-events: auto;">', unsafe_allow_html=True)
