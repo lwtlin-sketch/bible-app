@@ -96,7 +96,7 @@ elif HAS_REPORTLAB:
     except Exception as e:
         st.error(f"⚠️ PDF 字型載入失敗，真實錯誤訊息：\n{str(e)}")
 
-# --- 核心邏輯函式 (保留了最新的符號容錯) ---
+# --- 核心邏輯函式 ---
 def normalize_string(s):
     s = s.replace('啓', '啟').replace('世紀', '世記')
     s = s.replace('/', ':').replace('／', ':').replace('\\', ':')
@@ -205,7 +205,7 @@ def parse_input_string(input_str):
 
 
 # =========================================================================
-# ★★★ API 抓取函式 (100% 複製自 7/30 原始碼，無任何 Cache，保證穩定) ★★★
+# ★★★ 原汁原味的 API 抓取函式 (無快取、最安全) ★★★
 # =========================================================================
 def fetch_footnotes_db(book_no, chapter):
     url = f"https://www.recoveryversion.com.tw/api/getFoots?VERSION=1&chapter_code={book_no}&section_code={chapter}"
@@ -276,7 +276,6 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
         return verse_dict
     except Exception as e: return {"error": f"連線錯誤: {str(e)}"}
 # =========================================================================
-
 
 # --- 產生 超大按鈕複製元件 ---
 def render_giant_copy_button(text_content):
@@ -355,7 +354,7 @@ def generate_html(text_content, font_mult, theme):
     return html_template
 
 
-# --- 產生 PDF (完美表格對齊) ---
+# --- 產生 PDF ---
 def generate_pdf(text_content, font_mult, theme):
     if not HAS_REPORTLAB or not FONT_LOADED: return None
     buffer = io.BytesIO()
@@ -424,7 +423,7 @@ def generate_pdf(text_content, font_mult, theme):
         return buffer.getvalue()
     except Exception: return None
 
-# --- 產生圖片 (防切斷、不重疊) ---
+# --- 產生圖片 ---
 def generate_image(text_content, font_mult, theme):
     if not HAS_PIL or not os.path.exists(FONT_PATH): return None
     
@@ -595,7 +594,7 @@ with col1: btn_start = st.button("🚀 開始抓取", type="primary")
 with col2: st.button("🗑️ 清除內容", on_click=clear_text)
 
 # =========================================================================
-# ★★★ 雙軌制智慧大腦：無註解=極速並行，有註解=最安全的原始單線排隊 ★★★
+# ★★★ 雙軌制智慧大腦：有註解=排隊抓，無註解=極速抓 ★★★
 # =========================================================================
 if btn_start or auto_trigger:
     st.session_state.show_web = False 
@@ -607,7 +606,6 @@ if btn_start or auto_trigger:
         
         tasks = parse_input_string(user_input)
         
-        # 整理所有不重複的查詢任務並排序，確保順序不亂
         unique_fetches = list({(t['no'], current_ch) for t in tasks for current_ch in range(t['ch_start'], t['ch_end'] + 1)})
         unique_fetches.sort(key=lambda x: (x[0], x[1]))
         
@@ -616,7 +614,8 @@ if btn_start or auto_trigger:
             st.stop()
 
         st.info(f"⚡ 正在為您抓取 {len(unique_fetches)} 個章節中，請稍候...")
-        progress_bar = st.progress(0)
+        
+        my_bar = st.progress(0) # ★ 換上最安全的變數名稱，保證不報錯
         results_map = {}
         
         # 【雙軌制 軌道 1】：有勾選註解 -> 使用 100% 原始的安全循序抓取
@@ -624,4 +623,90 @@ if btn_start or auto_trigger:
             for i, req in enumerate(unique_fetches):
                 results_map[req] = fetch_verse_dict(req[0], req[1], include_footnotes=True)
                 time.sleep(0.1) # 神奇的原始 0.1 秒，保命符！
-                progress
+                if len(unique_fetches) > 0:
+                    my_bar.progress((i + 1) / len(unique_fetches))
+                
+        # 【雙軌制 軌道 2】：無註解 -> 使用多執行緒極速飆車
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                future_to_req = {executor.submit(fetch_verse_dict, req[0], req[1], False): req for req in unique_fetches}
+                for i, future in enumerate(concurrent.futures.as_completed(future_to_req)):
+                    req = future_to_req[future]  
+                    results_map[req] = future.result() 
+                    if len(unique_fetches) > 0:
+                        my_bar.progress((i + 1) / len(unique_fetches))
+
+        # --- 將抓回來的結果，依照使用者輸入的順序重組 ---
+        final_lines, all_footnotes_list, current_book_no = [], [], None
+        for t in tasks:
+            for current_ch in range(t['ch_start'], t['ch_end'] + 1):
+                verse_dict = results_map.get((t['no'], current_ch), {})
+                if verse_dict and "error" in verse_dict:
+                    st.error(f"抓取 {t['name']} {current_ch} 章時發生錯誤: {verse_dict['error']}")
+                    continue
+                if verse_dict:
+                    start_v = t['v_start'] if current_ch == t['ch_start'] else 1
+                    end_v = t['v_end'] if current_ch == t['ch_end'] else 999
+                    found_any = False
+                    for v in sorted(verse_dict.keys()):
+                        if start_v <= v <= end_v:
+                            found_any = True
+                            if t['no'] != current_book_no:
+                                if current_book_no is not None: final_lines.append(SEPARATOR_LINE)
+                                if output_mode.startswith("模式 2"): final_lines.append(BOOK_FULL_MAP.get(t['name'], t['name']))
+                                current_book_no = t['no']
+                            content = verse_dict[v]['text']
+                            prefix = f"{t['name']} {current_ch}:{v}" if output_mode.startswith("模式 1") else f"{current_ch}:{v}"
+                            final_lines.append(f"{prefix} {content}")
+                            if include_footnotes and verse_dict[v]['footnotes']:
+                                for fn_text in verse_dict[v]['footnotes']: all_footnotes_list.append(f"{prefix} ｜ {fn_text}")
+                    if not found_any: final_lines.append(f"[{t['name']} {current_ch}:{start_v} 無此節]")
+
+        if include_footnotes and all_footnotes_list:
+            final_lines.extend([FOOTNOTE_SEPARATOR, FOOTNOTE_TITLE] + all_footnotes_list)
+
+        if not final_lines: st.error("找不到任何經文，請檢查您的輸入是否正確。")
+        else: st.session_state.final_text = "\n".join(final_lines)
+
+if st.session_state.final_text:
+    final_text = st.session_state.final_text
+    st.success("🎉 抓取完成！")
+    
+    render_giant_copy_button(final_text)
+    
+    with st.container(height=350): st.code(final_text, language="text")
+    
+    font_mult = {"標準": 1.0, "偏大": 1.25, "特大 (長輩友善)": 1.5}[font_size_setting]
+    theme_val = "dark" if theme_setting.startswith("dark") else "light"
+    
+    st.write("### 📥 分享與匯出 (圖片 / PDF / 網頁版)")
+    st.markdown('<div class="img-instruction">💡 若在 LINE 裡無法長按圖片，請直接點擊下方「📥 下載圖片」按鈕！</div>', unsafe_allow_html=True)
+    
+    img_data = generate_image(final_text, font_mult, theme_val) if HAS_PIL else None
+    
+    dl_col1, dl_col2, dl_col3, dl_col4 = st.columns(4)
+    with dl_col1:
+        if img_data: st.download_button("📥 下載圖片", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True, type="primary")
+        else: st.button("🖼️ 缺圖片套件", disabled=True, use_container_width=True)
+    with dl_col2:
+        if st.button("🌐 展開網頁版", use_container_width=True):
+            st.session_state.show_web = not st.session_state.show_web
+    with dl_col3: 
+        st.download_button("📝 下載純文字", data=final_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
+    with dl_col4:
+        if HAS_REPORTLAB and FONT_LOADED:
+            pdf_data = generate_pdf(final_text, font_mult, theme_val)
+            if pdf_data: st.download_button("📄 下載 PDF", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
+            else: st.button("📄 PDF (錯誤)", disabled=True, use_container_width=True)
+        else: st.button("📄 缺字型", disabled=True, use_container_width=True)
+
+    if st.session_state.show_web:
+        st.markdown("---")
+        st.markdown("### 🌐 網頁版預覽 (可直接在此滑動閱讀)")
+        html_data = generate_html(final_text, font_mult, theme_val)
+        components.html(html_data, height=650, scrolling=True)
+
+    st.write("---")
+    if img_data:
+        b64_img = base64.b64encode(img_data).decode('utf-8')
+        st.markdown(f'<img src="data:image/png;base64,{b64_img}" style="width: 100%; border: 1px solid #ccc; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); -webkit-touch-callout: default; pointer-events: auto;">', unsafe_allow_html=True)
