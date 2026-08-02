@@ -203,9 +203,7 @@ def parse_input_string(input_str):
         })
     return parsed_items
 
-
-# ★★★ 100% 完美退回 7 月 30 日最原始的 API 請求邏輯與 Headers ★★★
-@st.cache_data(ttl=86400, show_spinner=False)
+# ★★★ 強制拔除快取，並100%還原 7月30日最原始的 Headers 與邏輯 ★★★
 def fetch_footnotes_db(book_no, chapter):
     url = f"https://www.recoveryversion.com.tw/api/getFoots?VERSION=1&chapter_code={book_no}&section_code={chapter}"
     try:
@@ -228,7 +226,7 @@ def fetch_footnotes_db(book_no, chapter):
     except: pass
     return {}
 
-@st.cache_data(ttl=86400, show_spinner=False)
+# ★★★ 強制拔除快取，100%還原原始邏輯，保證抓到註解 ★★★
 def fetch_verse_dict(book_no, chapter, include_footnotes=False):
     query = f"?VERSION=1&output[]=content&output[]=unit_code&output[]=segment_code&chapter_code={book_no}&section_code={chapter}&ORDER=id"
     url = f"https://www.recoveryversion.com.tw/api/getVerses{query}"
@@ -276,7 +274,6 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
         return verse_dict
     except Exception as e: return {"error": f"連線錯誤: {str(e)}"}
 
-
 # --- 產生 超大按鈕複製元件 ---
 def render_giant_copy_button(text_content):
     b64_text = base64.b64encode(text_content.encode('utf-8')).decode('utf-8')
@@ -290,7 +287,7 @@ def render_giant_copy_button(text_content):
         navigator.clipboard.writeText(str).then(function() {{
             alert('✅ 複製成功！\\n您可以直接去 LINE 或 Word 貼上了！');
         }}, function(err) {{
-            alert('❌ 複製失敗，請手手動複製。');
+            alert('❌ 複製失敗，請手動複製。');
         }});
     }}
     </script>
@@ -602,32 +599,34 @@ if btn_start or auto_trigger:
         st.success("🔗 網址已更新！您可以直接複製瀏覽器上方網址，傳給朋友點開會自動抓取！")
         
         tasks = parse_input_string(user_input)
-        unique_fetches = set()
-        for t in tasks:
-            if t['ch_start'] > t['ch_end']: t['ch_end'] = t['ch_start']
-            for current_ch in range(t['ch_start'], t['ch_end'] + 1):
-                unique_fetches.add((t['no'], current_ch))
+        unique_fetches = list({(t['no'], current_ch) for t in tasks for current_ch in range(t['ch_start'], t['ch_end'] + 1)})
         
         if len(unique_fetches) > 40:
             st.error("⚠️ 一次查詢的章節數量過多（超過 40 章）。為了保護伺服器，請分批查詢！")
             st.stop()
 
-        st.info(f"⚡ 正在並行抓取 {len(unique_fetches)} 個章節中，請稍候...")
+        st.info(f"⚡ 正在抓取 {len(unique_fetches)} 個章節中，請稍候...")
         progress_bar = st.progress(0)
-        
         results_map = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            future_to_req = {}
-            for req in unique_fetches:
-                # ★ 關鍵保護：加入 0.05秒 的極短延遲，錯開並發請求時間，防止伺服器阻擋註解抓取
-                future = executor.submit(fetch_verse_dict, req[0], req[1], include_footnotes)
-                future_to_req[future] = req
-                time.sleep(0.05)
-                
-            for i, future in enumerate(concurrent.futures.as_completed(future_to_req)):
-                req = future_to_req[future]  
-                results_map[req] = future.result() 
+        
+        # ★★★ 智慧模式切換：若要抓註解，退回最原始、最安全的排隊抓取模式 ★★★
+        if include_footnotes:
+            for i, req in enumerate(unique_fetches):
+                results_map[req] = fetch_verse_dict(req[0], req[1], include_footnotes)
+                time.sleep(0.1)  # 安全間隔，保證伺服器不阻擋
                 progress_bar.progress((i + 1) / len(unique_fetches))
+        else:
+            # 不抓註解時，維持多執行緒極速抓取
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                future_to_req = {}
+                for req in unique_fetches:
+                    future = executor.submit(fetch_verse_dict, req[0], req[1], include_footnotes)
+                    future_to_req[future] = req
+                    time.sleep(0.05)
+                for i, future in enumerate(concurrent.futures.as_completed(future_to_req)):
+                    req = future_to_req[future]  
+                    results_map[req] = future.result() 
+                    progress_bar.progress((i + 1) / len(unique_fetches))
 
         final_lines, all_footnotes_list, current_book_no = [], [], None
         for t in tasks:
