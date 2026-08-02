@@ -96,7 +96,7 @@ elif HAS_REPORTLAB:
     except Exception as e:
         st.error(f"⚠️ PDF 字型載入失敗，真實錯誤訊息：\n{str(e)}")
 
-# --- 核心邏輯函式 (保留了最新的符號容錯) ---
+# --- 核心邏輯函式 ---
 def normalize_string(s):
     s = s.replace('啓', '啟').replace('世紀', '世記')
     s = s.replace('/', ':').replace('／', ':').replace('\\', ':')
@@ -203,12 +203,12 @@ def parse_input_string(input_str):
         })
     return parsed_items
 
-
 # =========================================================================
-# ★★★ API 抓取函式 (100% 複製自 7/30 原始碼，無任何 Cache，保證穩定) ★★★
+# ★★★ 真相大白：換上官方新版的註解網址 (getFootnotes) ★★★
 # =========================================================================
 def fetch_footnotes_db(book_no, chapter):
-    url = f"https://www.recoveryversion.com.tw/api/getFoots?VERSION=1&chapter_code={book_no}&section_code={chapter}"
+    # 👇 網址已從 getFoots 改為官方最新版的 getFootnotes
+    url = f"https://www.recoveryversion.com.tw/api/getFootnotes?VERSION=1&chapter_code={book_no}&section_code={chapter}"
     try:
         headers = {
             'Accept': '*/*', 'Accept-Language': 'zh-TW,zh;q=0.9',
@@ -276,7 +276,6 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
         return verse_dict
     except Exception as e: return {"error": f"連線錯誤: {str(e)}"}
 # =========================================================================
-
 
 # --- 產生 超大按鈕複製元件 ---
 def render_giant_copy_button(text_content):
@@ -355,7 +354,7 @@ def generate_html(text_content, font_mult, theme):
     return html_template
 
 
-# --- 產生 PDF (完美表格對齊) ---
+# --- 產生 PDF ---
 def generate_pdf(text_content, font_mult, theme):
     if not HAS_REPORTLAB or not FONT_LOADED: return None
     buffer = io.BytesIO()
@@ -424,7 +423,7 @@ def generate_pdf(text_content, font_mult, theme):
         return buffer.getvalue()
     except Exception: return None
 
-# --- 產生圖片 (防切斷、不重疊) ---
+# --- 產生圖片 ---
 def generate_image(text_content, font_mult, theme):
     if not HAS_PIL or not os.path.exists(FONT_PATH): return None
     
@@ -437,275 +436,4 @@ def generate_image(text_content, font_mult, theme):
     c_sep = (100, 100, 100) if is_dark else (200, 200, 200)
 
     SCALE = 3 
-    font_size = int(20 * SCALE * font_mult)
-    margin = 40 * SCALE 
-    max_width = 800 * SCALE
-    usable_width = max_width - 2 * margin - (30 * SCALE)
-    
-    intra_verse_spacing = int(font_size * 0.2) 
-    inter_verse_spacing = int(font_size * 0.8) 
-    
-    try: 
-        font = ImageFont.truetype(FONT_PATH, font_size)
-        font_small = ImageFont.truetype(FONT_PATH, int(font_size * 0.8))
-        font_title = ImageFont.truetype(FONT_PATH, int(font_size * 1.3))
-    except Exception: return None 
-
-    wrapped_lines = [] 
-    for line in text_content.split('\n'):
-        line = line.strip()
-        if not line: continue
-        if line == FOOTNOTE_SEPARATOR:
-            wrapped_lines.extend([("_SPACER_",0,"spacer",None), ("━━━━━━━━━━━━━",0,"spacer",None), ("_SPACER_",0,"spacer",None)])
-            continue
-        if line == FOOTNOTE_TITLE or line in FULL_BIBLE_BOOKS:
-            wrapped_lines.extend([("_SPACER_",0,"spacer",None), (line,0,"title",None), ("_LINE_",0,"line",None)])
-            continue
-        if line == SEPARATOR_LINE:
-            wrapped_lines.extend([("_SPACER_",0,"spacer",None), ("◆   ◆   ◆",0,"separator",None), ("_SPACER_",0,"spacer",None)])
-            continue
-            
-        is_footnote = "｜" in line
-        current_font = font_small if is_footnote else font
-        book_part, num_part = "", ""
-        indent_width = 0
-        
-        match = re.match(r'^(([一-龥]*)\s*(\d+:\d+(?:\s*｜\s*\[[^\]]+\])?))\s+(.*)', line)
-        if match:
-            prefix, book_part, num_part, line = match.group(1), match.group(2).strip(), match.group(3).strip(), match.group(4).strip()
-            actual_prefix = ""
-            if book_part: actual_prefix += book_part + " "
-            if num_part: actual_prefix += num_part + " "
-            try: indent_width = current_font.getlength(actual_prefix)
-            except: indent_width = current_font.getsize(actual_prefix)[0]
-            
-        current_line, is_first_line = "", True
-        current_max_width = max(usable_width - indent_width, int(font_size * 2))
-        
-        for char in line:
-            test_line = current_line + char
-            try: text_len = current_font.getlength(test_line)
-            except: text_len = current_font.getsize(test_line)[0] 
-            
-            if text_len > current_max_width:
-                wrapped_lines.append((current_line, 0 if is_first_line else indent_width, "footnote" if is_footnote else "verse", (book_part, num_part) if is_first_line else None))
-                is_first_line = False
-                current_line = char
-            else:
-                current_line = test_line
-                
-        if current_line:
-            wrapped_lines.append((current_line, 0 if is_first_line else indent_width, "footnote" if is_footnote else "verse", (book_part, num_part) if is_first_line else None))
-        wrapped_lines.append(("_VERSE_SPACER_", 0, "spacer", None)) 
-
-    total_height = 2 * margin
-    for text, _, l_type, _ in wrapped_lines:
-        if l_type == "title": total_height += int(font_size * 2.0)
-        elif l_type == "line": total_height += int(font_size * 0.8) 
-        elif l_type == "separator": total_height += int(font_size * 1.2)
-        elif text == "_SPACER_": total_height += int(font_size * 0.5) 
-        elif text == "_VERSE_SPACER_": total_height += inter_verse_spacing 
-        elif l_type == "footnote": total_height += int(font_size * 0.8) + intra_verse_spacing
-        else: total_height += font_size + intra_verse_spacing 
-    total_height += (100 * SCALE) 
-            
-    img = Image.new('RGB', (max_width, total_height), color=c_bg)
-    draw = ImageDraw.Draw(img)
-    
-    y_text = margin
-    for text, x_offset, l_type, prefix_data in wrapped_lines:
-        if text == "_SPACER_": y_text += int(font_size * 0.5)
-        elif text == "_VERSE_SPACER_": y_text += inter_verse_spacing
-        elif l_type == "title":
-            bbox = draw.textbbox((margin, y_text), text, font=font_title)
-            draw.text((margin, y_text), text, font=font_title, fill=c_title)
-            y_text = bbox[3] + int(8 * SCALE)
-        elif l_type == "line":
-            draw.line([(margin, y_text), (max_width - margin, y_text)], fill=c_title, width=int(2.5*SCALE))
-            y_text += int(15 * SCALE) 
-        elif l_type == "separator":
-            try: w = font.getlength(text)
-            except: w = font.getsize(text)[0]
-            draw.text(((max_width - w) / 2, y_text), text, font=font, fill=c_sep)
-            y_text += int(font_size * 1.2)
-        elif "verse" in l_type or l_type == "footnote":
-            is_footnote_line = (l_type == "footnote")
-            current_font = font_small if is_footnote_line else font
-            if prefix_data: 
-                bp, np = prefix_data
-                cur_x = margin
-                if bp: 
-                    draw.text((cur_x, y_text), bp + " ", font=current_font, fill=c_fn if is_footnote_line else c_title)
-                    try: w = current_font.getlength(bp + " ")
-                    except: w = current_font.getsize(bp + " ")[0]
-                    cur_x += w
-                if np: 
-                    draw.text((cur_x, y_text), np + " ", font=current_font, fill=c_fn if is_footnote_line else c_num)
-                    try: w = current_font.getlength(np + " ")
-                    except: w = current_font.getsize(np + " ")[0]
-                    cur_x += w
-                draw.text((cur_x, y_text), text, font=current_font, fill=c_fn if is_footnote_line else c_text)
-            else:
-                draw.text((margin + x_offset, y_text), text, font=current_font, fill=c_fn if is_footnote_line else c_text)
-            y_text += (int(font_size * 0.8) if is_footnote_line else font_size) + intra_verse_spacing
-            
-    if total_height > 20000: SCALE_DOWN = 2
-    else: SCALE_DOWN = SCALE
-        
-    img = img.resize((max_width // SCALE_DOWN, total_height // SCALE_DOWN), Image.Resampling.LANCZOS)
-    buffer = io.BytesIO()
-    img.save(buffer, format="PNG", optimize=True)
-    return buffer.getvalue()
-
-# --- Streamlit 介面 ---
-st.title("📖 恢復本經節抓取工具")
-
-if "user_input" not in st.session_state:
-    st.session_state.user_input = st.query_params.get("q", "")
-if "final_text" not in st.session_state:
-    st.session_state.final_text = ""
-if "show_web" not in st.session_state:
-    st.session_state.show_web = False 
-
-auto_trigger = False
-if "q" in st.query_params and not st.session_state.get("auto_triggered", False):
-    st.session_state.auto_triggered = True
-    auto_trigger = True
-
-def clear_text():
-    st.session_state.user_input = ""
-    st.session_state.final_text = ""
-    st.session_state.show_web = False
-    st.query_params.clear()
-
-with st.expander("⚙️ 輸出與排版設定 (深色模式/大小)", expanded=True):
-    col_a, col_b = st.columns(2)
-    with col_a:
-        output_mode = st.radio("排版模式：", ["模式 1：每節顯示書名簡寫 (例如：可 1:1)", "模式 2：頂部顯示完整書名 (例如：馬可福音)"], index=1)
-        theme_setting = st.radio("配色主題 (適用圖片、PDF與網頁)：", ["light (經典白底)", "dark (護眼深色)"], index=0)
-    with col_b:
-        font_size_setting = st.radio("輸出字體大小：", ["標準", "偏大", "特大 (長輩友善)"], index=0)
-        include_footnotes = st.checkbox("📖 包含註解 (附加於最下方)", value=False)
-
-st.markdown("### 🎙️ 請用語音或鍵盤輸入經節")
-user_input = st.text_area("", key="user_input", placeholder="例如：約三15-16，羅馬10/17，加5/6")
-
-col1, col2 = st.columns([1, 4])
-with col1: btn_start = st.button("🚀 開始抓取", type="primary")
-with col2: st.button("🗑️ 清除內容", on_click=clear_text)
-
-# =========================================================================
-# ★★★ 雙軌制智慧大腦：無註解=極速並行，有註解=最安全的原始單線排隊 ★★★
-# =========================================================================
-if btn_start or auto_trigger:
-    st.session_state.show_web = False 
-    if not user_input.strip():
-        st.warning("請輸入內容！")
-    else:
-        st.query_params["q"] = user_input
-        st.success("🔗 網址已更新！您可以直接複製瀏覽器上方網址，傳給朋友點開會自動抓取！")
-        
-        tasks = parse_input_string(user_input)
-        
-        # 整理所有不重複的查詢任務並排序，確保順序不亂
-        unique_fetches = list({(t['no'], current_ch) for t in tasks for current_ch in range(t['ch_start'], t['ch_end'] + 1)})
-        unique_fetches.sort(key=lambda x: (x[0], x[1]))
-        
-        if len(unique_fetches) > 40:
-            st.error("⚠️ 一次查詢的章節數量過多（超過 40 章）。為了保護伺服器，請分批查詢！")
-            st.stop()
-
-        st.info(f"⚡ 正在為您抓取 {len(unique_fetches)} 個章節中，請稍候...")
-        progress_bar = st.progress(0)
-        results_map = {}
-        
-        # 【雙軌制 軌道 1】：有勾選註解 -> 使用 100% 原始的安全循序抓取
-        if include_footnotes:
-            for i, req in enumerate(unique_fetches):
-                results_map[req] = fetch_verse_dict(req[0], req[1], include_footnotes=True)
-                time.sleep(0.1) # 神奇的原始 0.1 秒，保命符！
-                progress_bar.progress((i + 1) / len(unique_fetches))
-                
-        # 【雙軌制 軌道 2】：無註解 -> 使用多執行緒極速飆車
-        else:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-                future_to_req = {executor.submit(fetch_verse_dict, req[0], req[1], False): req for req in unique_fetches}
-                for i, future in enumerate(concurrent.futures.as_completed(future_to_req)):
-                    req = future_to_req[future]  
-                    results_map[req] = future.result() 
-                    progress_bar.progress((i + 1) / len(unique_fetches))
-
-        # --- 將抓回來的結果，依照使用者輸入的順序重組 ---
-        final_lines, all_footnotes_list, current_book_no = [], [], None
-        for t in tasks:
-            for current_ch in range(t['ch_start'], t['ch_end'] + 1):
-                verse_dict = results_map.get((t['no'], current_ch), {})
-                if verse_dict and "error" in verse_dict:
-                    st.error(f"抓取 {t['name']} {current_ch} 章時發生錯誤: {verse_dict['error']}")
-                    continue
-                if verse_dict:
-                    start_v = t['v_start'] if current_ch == t['ch_start'] else 1
-                    end_v = t['v_end'] if current_ch == t['ch_end'] else 999
-                    found_any = False
-                    for v in sorted(verse_dict.keys()):
-                        if start_v <= v <= end_v:
-                            found_any = True
-                            if t['no'] != current_book_no:
-                                if current_book_no is not None: final_lines.append(SEPARATOR_LINE)
-                                if output_mode.startswith("模式 2"): final_lines.append(BOOK_FULL_MAP.get(t['name'], t['name']))
-                                current_book_no = t['no']
-                            content = verse_dict[v]['text']
-                            prefix = f"{t['name']} {current_ch}:{v}" if output_mode.startswith("模式 1") else f"{current_ch}:{v}"
-                            final_lines.append(f"{prefix} {content}")
-                            if include_footnotes and verse_dict[v]['footnotes']:
-                                for fn_text in verse_dict[v]['footnotes']: all_footnotes_list.append(f"{prefix} ｜ {fn_text}")
-                    if not found_any: final_lines.append(f"[{t['name']} {current_ch}:{start_v} 無此節]")
-
-        if include_footnotes and all_footnotes_list:
-            final_lines.extend([FOOTNOTE_SEPARATOR, FOOTNOTE_TITLE] + all_footnotes_list)
-
-        if not final_lines: st.error("找不到任何經文，請檢查您的輸入是否正確。")
-        else: st.session_state.final_text = "\n".join(final_lines)
-
-if st.session_state.final_text:
-    final_text = st.session_state.final_text
-    st.success("🎉 抓取完成！")
-    
-    render_giant_copy_button(final_text)
-    
-    with st.container(height=350): st.code(final_text, language="text")
-    
-    font_mult = {"標準": 1.0, "偏大": 1.25, "特大 (長輩友善)": 1.5}[font_size_setting]
-    theme_val = "dark" if theme_setting.startswith("dark") else "light"
-    
-    st.write("### 📥 分享與匯出 (圖片 / PDF / 網頁版)")
-    st.markdown('<div class="img-instruction">💡 若在 LINE 裡無法長按圖片，請直接點擊下方「📥 下載圖片」按鈕！</div>', unsafe_allow_html=True)
-    
-    img_data = generate_image(final_text, font_mult, theme_val) if HAS_PIL else None
-    
-    dl_col1, dl_col2, dl_col3, dl_col4 = st.columns(4)
-    with dl_col1:
-        if img_data: st.download_button("📥 下載圖片", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True, type="primary")
-        else: st.button("🖼️ 缺圖片套件", disabled=True, use_container_width=True)
-    with dl_col2:
-        if st.button("🌐 展開網頁版", use_container_width=True):
-            st.session_state.show_web = not st.session_state.show_web
-    with dl_col3: 
-        st.download_button("📝 下載純文字", data=final_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
-    with dl_col4:
-        if HAS_REPORTLAB and FONT_LOADED:
-            pdf_data = generate_pdf(final_text, font_mult, theme_val)
-            if pdf_data: st.download_button("📄 下載 PDF", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
-            else: st.button("📄 PDF (錯誤)", disabled=True, use_container_width=True)
-        else: st.button("📄 缺字型", disabled=True, use_container_width=True)
-
-    if st.session_state.show_web:
-        st.markdown("---")
-        st.markdown("### 🌐 網頁版預覽 (可直接在此滑動閱讀)")
-        html_data = generate_html(final_text, font_mult, theme_val)
-        components.html(html_data, height=650, scrolling=True)
-
-    st.write("---")
-    if img_data:
-        b64_img = base64.b64encode(img_data).decode('utf-8')
-        st.markdown(f'<img src="data:image/png;base64,{b64_img}" style="width: 100%; border: 1px solid #ccc; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); -webkit-touch-callout: default; pointer-events: auto;">', unsafe_allow_html=True)
+    font_size =
