@@ -3,6 +3,7 @@ import streamlit.components.v1 as components
 import requests
 from bs4 import BeautifulSoup
 import re
+import time
 import io
 import os
 import base64
@@ -202,13 +203,16 @@ def parse_input_string(input_str):
         })
     return parsed_items
 
+
+# ★★★ 100% 完美退回 7 月 30 日最原始的 API 請求邏輯與 Headers ★★★
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_footnotes_db(book_no, chapter):
     url = f"https://www.recoveryversion.com.tw/api/getFoots?VERSION=1&chapter_code={book_no}&section_code={chapter}"
     try:
         headers = {
-            'Accept': '*/*', 'Origin': 'https://recoveryversion.twgbr.org', 
-            'Referer': 'https://recoveryversion.twgbr.org/', 'User-Agent': 'Mozilla/5.0'
+            'Accept': '*/*', 'Accept-Language': 'zh-TW,zh;q=0.9',
+            'Origin': 'https://recoveryversion.twgbr.org', 'Referer': 'https://recoveryversion.twgbr.org/',
+            'User-Agent': 'Mozilla/5.0'
         }
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
@@ -221,16 +225,15 @@ def fetch_footnotes_db(book_no, chapter):
                     content = content.replace('<br>', ' ').replace('<br/>', ' ').replace('ˍ', ' ')
                     fn_dict[v_num][str(n_num)] = re.sub(r'<[^>]+>', '', content)
             return fn_dict
-    except Exception: pass
+    except: pass
     return {}
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def fetch_verse_dict(book_no, chapter, include_footnotes):
+def fetch_verse_dict(book_no, chapter, include_footnotes=False):
     query = f"?VERSION=1&output[]=content&output[]=unit_code&output[]=segment_code&chapter_code={book_no}&section_code={chapter}&ORDER=id"
     url = f"https://www.recoveryversion.com.tw/api/getVerses{query}"
     fn_db = fetch_footnotes_db(book_no, chapter) if include_footnotes else {}
-    if fn_db and "error" in fn_db: return {"error": f"註解抓取異常: {fn_db['error']}"}
-
+    
     try:
         headers = {
             'Accept': '*/*', 'Origin': 'https://recoveryversion.twgbr.org', 
@@ -255,19 +258,24 @@ def fetch_verse_dict(book_no, chapter, include_footnotes):
             if v_num > 0 and content_html:
                 soup = BeautifulSoup(content_html, 'html.parser')
                 paired_footnotes = []
+                
                 if include_footnotes:
                     for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c): popup.decompose()
                     if v_num in fn_db:
                         for n_num in sorted(fn_db[v_num].keys(), key=lambda x: int(x) if x.isdigit() else 0):
                             paired_footnotes.append(f"[註{n_num}] {fn_db[v_num][n_num]}")
-                    for sup in soup.find_all('sup'): sup.replace_with(f"[{sup.get_text(strip=True)}]") 
-                    for a_note in soup.find_all('a', class_=lambda c: c and 'note' in c.lower()): a_note.replace_with(f"[{a_note.get_text(strip=True)}]")
+                    for sup in soup.find_all('sup'):
+                        sup.replace_with(f"[{sup.get_text(strip=True)}]") 
+                    for a_note in soup.find_all('a', class_=lambda c: c and 'note' in c.lower()):
+                        a_note.replace_with(f"[{a_note.get_text(strip=True)}]")
                 else:
                     for sup in soup.find_all('sup'): sup.decompose()
                     for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c): popup.decompose()
+                    
                 verse_dict[v_num] = {'text': soup.get_text(separator='', strip=True), 'footnotes': paired_footnotes}
         return verse_dict
     except Exception as e: return {"error": f"連線錯誤: {str(e)}"}
+
 
 # --- 產生 超大按鈕複製元件 ---
 def render_giant_copy_button(text_content):
@@ -282,7 +290,7 @@ def render_giant_copy_button(text_content):
         navigator.clipboard.writeText(str).then(function() {{
             alert('✅ 複製成功！\\n您可以直接去 LINE 或 Word 貼上了！');
         }}, function(err) {{
-            alert('❌ 複製失敗，請手動複製。');
+            alert('❌ 複製失敗，請手手動複製。');
         }});
     }}
     </script>
@@ -464,7 +472,6 @@ def generate_image(text_content, font_mult, theme):
         match = re.match(r'^(([一-龥]*)\s*(\d+:\d+(?:\s*｜\s*\[[^\]]+\])?))\s+(.*)', line)
         if match:
             prefix, book_part, num_part, line = match.group(1), match.group(2).strip(), match.group(3).strip(), match.group(4).strip()
-            # ★ 修復：精算實際要印出來的前綴文字寬度
             actual_prefix = ""
             if book_part: actual_prefix += book_part + " "
             if num_part: actual_prefix += num_part + " "
@@ -472,8 +479,6 @@ def generate_image(text_content, font_mult, theme):
             except: indent_width = current_font.getsize(actual_prefix)[0]
             
         current_line, is_first_line = "", True
-        
-        # ★ 修復：強制扣除前綴寬度，保證不超出畫布
         current_max_width = max(usable_width - indent_width, int(font_size * 2))
         
         for char in line:
@@ -612,7 +617,13 @@ if btn_start or auto_trigger:
         
         results_map = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            future_to_req = {executor.submit(fetch_verse_dict, req[0], req[1], include_footnotes): req for req in unique_fetches}
+            future_to_req = {}
+            for req in unique_fetches:
+                # ★ 關鍵保護：加入 0.05秒 的極短延遲，錯開並發請求時間，防止伺服器阻擋註解抓取
+                future = executor.submit(fetch_verse_dict, req[0], req[1], include_footnotes)
+                future_to_req[future] = req
+                time.sleep(0.05)
+                
             for i, future in enumerate(concurrent.futures.as_completed(future_to_req)):
                 req = future_to_req[future]  
                 results_map[req] = future.result() 
