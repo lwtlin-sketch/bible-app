@@ -464,15 +464,23 @@ def generate_image(text_content, font_mult, theme):
         match = re.match(r'^(([一-龥]*)\s*(\d+:\d+(?:\s*｜\s*\[[^\]]+\])?))\s+(.*)', line)
         if match:
             prefix, book_part, num_part, line = match.group(1), match.group(2).strip(), match.group(3).strip(), match.group(4).strip()
-            try: indent_width = current_font.getlength(prefix + " ")
-            except: indent_width = current_font.getsize(prefix + " ")[0]
+            # ★ 修復：精算實際要印出來的前綴文字寬度
+            actual_prefix = ""
+            if book_part: actual_prefix += book_part + " "
+            if num_part: actual_prefix += num_part + " "
+            try: indent_width = current_font.getlength(actual_prefix)
+            except: indent_width = current_font.getsize(actual_prefix)[0]
             
         current_line, is_first_line = "", True
+        
+        # ★ 修復：強制扣除前綴寬度，保證不超出畫布
+        current_max_width = max(usable_width - indent_width, int(font_size * 2))
+        
         for char in line:
             test_line = current_line + char
             try: text_len = current_font.getlength(test_line)
             except: text_len = current_font.getsize(test_line)[0] 
-            current_max_width = usable_width if is_first_line else (usable_width - indent_width)
+            
             if text_len > current_max_width:
                 wrapped_lines.append((current_line, 0 if is_first_line else indent_width, "footnote" if is_footnote else "verse", (book_part, num_part) if is_first_line else None))
                 is_first_line = False
@@ -551,7 +559,7 @@ if "user_input" not in st.session_state:
 if "final_text" not in st.session_state:
     st.session_state.final_text = ""
 if "show_web" not in st.session_state:
-    st.session_state.show_web = False # ★ 新增控制網頁預覽的變數
+    st.session_state.show_web = False 
 
 auto_trigger = False
 if "q" in st.query_params and not st.session_state.get("auto_triggered", False):
@@ -581,7 +589,7 @@ with col1: btn_start = st.button("🚀 開始抓取", type="primary")
 with col2: st.button("🗑️ 清除內容", on_click=clear_text)
 
 if btn_start or auto_trigger:
-    st.session_state.show_web = False # ★ 每次重新抓取時自動關閉舊網頁預覽
+    st.session_state.show_web = False 
     if not user_input.strip():
         st.warning("請輸入內容！")
     else:
@@ -662,7 +670,6 @@ if st.session_state.final_text:
         if img_data: st.download_button("📥 下載圖片", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True, type="primary")
         else: st.button("🖼️ 缺圖片套件", disabled=True, use_container_width=True)
     with dl_col2:
-        # ★ 改為內建按鈕，不再強制開新分頁！
         if st.button("🌐 展開網頁版", use_container_width=True):
             st.session_state.show_web = not st.session_state.show_web
     with dl_col3: 
@@ -674,7 +681,6 @@ if st.session_state.final_text:
             else: st.button("📄 PDF (錯誤)", disabled=True, use_container_width=True)
         else: st.button("📄 缺字型", disabled=True, use_container_width=True)
 
-    # ★ 當使用者按下「展開網頁版」，就會在這裡無縫顯示！
     if st.session_state.show_web:
         st.markdown("---")
         st.markdown("### 🌐 網頁版預覽 (可直接在此滑動閱讀)")
