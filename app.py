@@ -96,7 +96,7 @@ elif HAS_REPORTLAB:
     except Exception as e:
         st.error(f"⚠️ PDF 字型載入失敗，真實錯誤訊息：\n{str(e)}")
 
-# --- 核心邏輯函式 ---
+# --- 核心邏輯函式 (保留了最新的符號容錯) ---
 def normalize_string(s):
     s = s.replace('啓', '啟').replace('世紀', '世記')
     s = s.replace('/', ':').replace('／', ':').replace('\\', ':')
@@ -205,7 +205,7 @@ def parse_input_string(input_str):
 
 
 # =========================================================================
-# ★★★ 原汁原味的 API 抓取函式 (無快取、最安全) ★★★
+# ★★★ API 抓取函式 (100% 複製自 7/30 原始碼，無任何 Cache，保證穩定) ★★★
 # =========================================================================
 def fetch_footnotes_db(book_no, chapter):
     url = f"https://www.recoveryversion.com.tw/api/getFoots?VERSION=1&chapter_code={book_no}&section_code={chapter}"
@@ -276,6 +276,7 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
         return verse_dict
     except Exception as e: return {"error": f"連線錯誤: {str(e)}"}
 # =========================================================================
+
 
 # --- 產生 超大按鈕複製元件 ---
 def render_giant_copy_button(text_content):
@@ -354,7 +355,7 @@ def generate_html(text_content, font_mult, theme):
     return html_template
 
 
-# --- 產生 PDF ---
+# --- 產生 PDF (完美表格對齊) ---
 def generate_pdf(text_content, font_mult, theme):
     if not HAS_REPORTLAB or not FONT_LOADED: return None
     buffer = io.BytesIO()
@@ -423,7 +424,7 @@ def generate_pdf(text_content, font_mult, theme):
         return buffer.getvalue()
     except Exception: return None
 
-# --- 產生圖片 ---
+# --- 產生圖片 (防切斷、不重疊) ---
 def generate_image(text_content, font_mult, theme):
     if not HAS_PIL or not os.path.exists(FONT_PATH): return None
     
@@ -594,7 +595,7 @@ with col1: btn_start = st.button("🚀 開始抓取", type="primary")
 with col2: st.button("🗑️ 清除內容", on_click=clear_text)
 
 # =========================================================================
-# ★★★ 雙軌制智慧大腦：有註解=排隊抓，無註解=極速抓 ★★★
+# ★★★ 雙軌制智慧大腦：無註解=極速並行，有註解=最安全的原始單線排隊 ★★★
 # =========================================================================
 if btn_start or auto_trigger:
     st.session_state.show_web = False 
@@ -606,6 +607,7 @@ if btn_start or auto_trigger:
         
         tasks = parse_input_string(user_input)
         
+        # 整理所有不重複的查詢任務並排序，確保順序不亂
         unique_fetches = list({(t['no'], current_ch) for t in tasks for current_ch in range(t['ch_start'], t['ch_end'] + 1)})
         unique_fetches.sort(key=lambda x: (x[0], x[1]))
         
@@ -614,8 +616,7 @@ if btn_start or auto_trigger:
             st.stop()
 
         st.info(f"⚡ 正在為您抓取 {len(unique_fetches)} 個章節中，請稍候...")
-        
-        my_bar = st.progress(0) # ★ 換上最安全的變數名稱，保證不報錯
+        progress_bar = st.progress(0)
         results_map = {}
         
         # 【雙軌制 軌道 1】：有勾選註解 -> 使用 100% 原始的安全循序抓取
@@ -623,8 +624,7 @@ if btn_start or auto_trigger:
             for i, req in enumerate(unique_fetches):
                 results_map[req] = fetch_verse_dict(req[0], req[1], include_footnotes=True)
                 time.sleep(0.1) # 神奇的原始 0.1 秒，保命符！
-                if len(unique_fetches) > 0:
-                    my_bar.progress((i + 1) / len(unique_fetches))
+                progress_bar.progress((i + 1) / len(unique_fetches))
                 
         # 【雙軌制 軌道 2】：無註解 -> 使用多執行緒極速飆車
         else:
@@ -633,8 +633,7 @@ if btn_start or auto_trigger:
                 for i, future in enumerate(concurrent.futures.as_completed(future_to_req)):
                     req = future_to_req[future]  
                     results_map[req] = future.result() 
-                    if len(unique_fetches) > 0:
-                        my_bar.progress((i + 1) / len(unique_fetches))
+                    progress_bar.progress((i + 1) / len(unique_fetches))
 
         # --- 將抓回來的結果，依照使用者輸入的順序重組 ---
         final_lines, all_footnotes_list, current_book_no = [], [], None
