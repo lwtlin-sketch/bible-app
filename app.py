@@ -204,10 +204,9 @@ def parse_input_string(input_str):
     return parsed_items
 
 # =========================================================================
-# ★★★ 真相大白：換上官方新版的註解網址 (getFootnotes) ★★★
+# ★★★ 革命性升級：破解官方座標密碼，將 [註1] 精準塞回經文中 ★★★
 # =========================================================================
 def fetch_footnotes_db(book_no, chapter):
-    # 👇 網址已從 getFoots 改為官方最新版的 getFootnotes
     url = f"https://www.recoveryversion.com.tw/api/getFootnotes?VERSION=1&chapter_code={book_no}&section_code={chapter}"
     try:
         headers = {
@@ -220,11 +219,21 @@ def fetch_footnotes_db(book_no, chapter):
             data = response.json()
             fn_dict = {}
             for item in data:
-                v_num, n_num, content = item.get("segment_code", 0), item.get("note_num", 0), item.get("note_content", "")
+                v_num = item.get("segment_code", 0)
+                n_num = item.get("note_num", 0)
+                n_loc = item.get("note_loc", 0) # ★ 取得座標
+                content = item.get("note_content", "")
+                
                 if v_num > 0 and content:
-                    if v_num not in fn_dict: fn_dict[v_num] = {}
+                    if v_num not in fn_dict: fn_dict[v_num] = []
                     content = content.replace('<br>', ' ').replace('<br/>', ' ').replace('ˍ', ' ')
-                    fn_dict[v_num][str(n_num)] = re.sub(r'<[^>]+>', '', content)
+                    content = re.sub(r'<[^>]+>', '', content)
+                    # ★ 將每個註解的編號、內容與座標儲存起來
+                    fn_dict[v_num].append({
+                        'num': n_num,
+                        'loc': int(n_loc),
+                        'content': content
+                    })
             return fn_dict
     except: pass
     return {}
@@ -256,23 +265,30 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
             
             content_html = item.get('content', '')
             if v_num > 0 and content_html:
+                # 官方現在給的是純文字，保險起見還是清一次 HTML
                 soup = BeautifulSoup(content_html, 'html.parser')
+                pure_text = soup.get_text(separator='', strip=True)
                 paired_footnotes = []
                 
-                if include_footnotes:
-                    for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c): popup.decompose()
-                    if v_num in fn_db:
-                        for n_num in sorted(fn_db[v_num].keys(), key=lambda x: int(x) if x.isdigit() else 0):
-                            paired_footnotes.append(f"[註{n_num}] {fn_db[v_num][n_num]}")
-                    for sup in soup.find_all('sup'):
-                        sup.replace_with(f"[{sup.get_text(strip=True)}]") 
-                    for a_note in soup.find_all('a', class_=lambda c: c and 'note' in c.lower()):
-                        a_note.replace_with(f"[{a_note.get_text(strip=True)}]")
-                else:
-                    for sup in soup.find_all('sup'): sup.decompose()
-                    for popup in soup.find_all('div', class_=lambda c: c and 'popup' in c): popup.decompose()
-                    
-                verse_dict[v_num] = {'text': soup.get_text(separator='', strip=True), 'footnotes': paired_footnotes}
+                if include_footnotes and v_num in fn_db:
+                    # 1. 產生最下方整理用的註解列表 (依照編號 1, 2, 3 排序)
+                    sorted_fns = sorted(fn_db[v_num], key=lambda x: x['num'])
+                    for fn in sorted_fns:
+                        paired_footnotes.append(f"[註{fn['num']}] {fn['content']}")
+                        
+                    # 2. 將 [註X] 塞回純文字經文中
+                    # ★ 逆向安插演算法：必須從座標最大的開始往前插 (reverse=True)
+                    # 這樣前面字串才不會變長，確保後面的座標能完美命中單字！
+                    loc_fns = sorted(fn_db[v_num], key=lambda x: x['loc'], reverse=True)
+                    for fn in loc_fns:
+                        idx = fn['loc']
+                        # 防呆：避免官方給的座標超過文字總長度
+                        if idx <= len(pure_text):
+                            pure_text = pure_text[:idx] + f"[註{fn['num']}]" + pure_text[idx:]
+                        else:
+                            pure_text += f"[註{fn['num']}]"
+                            
+                verse_dict[v_num] = {'text': pure_text, 'footnotes': paired_footnotes}
         return verse_dict
     except Exception as e: return {"error": f"連線錯誤: {str(e)}"}
 # =========================================================================
@@ -584,7 +600,7 @@ with st.expander("⚙️ 輸出與排版設定 (深色模式/大小)", expanded=
         theme_setting = st.radio("配色主題 (適用圖片、PDF與網頁)：", ["light (經典白底)", "dark (護眼深色)"], index=0)
     with col_b:
         font_size_setting = st.radio("輸出字體大小：", ["標準", "偏大", "特大 (長輩友善)"], index=0)
-        include_footnotes = st.checkbox("📖 包含註解 (附加於最下方)", value=False)
+        include_footnotes = st.checkbox("📖 包含註解 (附加於最下方，並標示於經文中)", value=False)
 
 st.markdown("### 🎙️ 請用語音或鍵盤輸入經節")
 user_input = st.text_area("", key="user_input", placeholder="例如：約三15-16，羅馬10/17，加5/6")
@@ -615,7 +631,7 @@ if btn_start or auto_trigger:
         my_bar = st.progress(0)
         results_map = {}
         
-        # 【智慧切換】有勾選註解：循序抓取；無註解：多執行緒極速抓取
+        # 雙軌制：有註解=排隊抓，無註解=極速抓
         if include_footnotes:
             for i, req in enumerate(unique_fetches):
                 results_map[req] = fetch_verse_dict(req[0], req[1], include_footnotes=True)
