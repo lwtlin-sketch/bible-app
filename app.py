@@ -200,7 +200,7 @@ def parse_input_string(input_str):
     return parsed_items
 
 # =========================================================================
-# ★★★ API 抓取函式 (使用秘密標記 {*1*} 來代表註解位置) ★★★
+# ★★★ API 抓取函式 (使用秘密標記，並加入了 -1 的座標偏移校正) ★★★
 # =========================================================================
 def fetch_footnotes_db(book_no, chapter):
     url = f"https://www.recoveryversion.com.tw/api/getFootnotes?VERSION=1&chapter_code={book_no}&section_code={chapter}"
@@ -269,10 +269,11 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
                     for fn in sorted_fns:
                         paired_footnotes.append(f"[註{fn['num']}] {fn['content']}")
                         
-                    # 逆向安插演算法：將秘密記號 {*數字*} 插回文字中，等一下各個引擎會自動把它變成上標藍字
+                    # 逆向安插演算法：將秘密記號 {*數字*} 插回文字中
                     loc_fns = sorted(fn_db[v_num], key=lambda x: x['loc'], reverse=True)
                     for fn in loc_fns:
-                        idx = fn['loc']
+                        # ★ 加入 -1 的偏移校正，完美精準對位！
+                        idx = max(0, fn['loc'] - 1)
                         if idx <= len(pure_text): pure_text = pure_text[:idx] + f"{{*{fn['num']}*}}" + pure_text[idx:]
                         else: pure_text += f"{{*{fn['num']}*}}"
                             
@@ -315,7 +316,7 @@ def generate_html(text_content, font_mult, theme):
     num_col = "#FF7F7F" if is_dark else "#B22222"
     fn_col = "#969696" if is_dark else "#555555"
     sep_col = "#888888" if is_dark else "#CCCCCC"
-    sup_col = "#8AB4F8" if is_dark else "#1F4E79" # 上標藍字的顏色
+    sup_col = "#8AB4F8" if is_dark else "#1F4E79" 
     
     base_size = int(18 * font_mult)
     title_size = int(24 * font_mult)
@@ -327,6 +328,7 @@ def generate_html(text_content, font_mult, theme):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>經節抓取結果</title>
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
             body {{ font-family: 'Noto Sans TC', sans-serif; line-height: 1.8; color: {text_col}; max-width: 800px; margin: 0 auto; padding: 20px; background-color: {bg_col}; }}
@@ -355,21 +357,48 @@ def generate_html(text_content, font_mult, theme):
             match = re.match(r'^(([一-龥]*)\s*(\d+:\d+(?:\s*｜\s*\[[^\]]+\])?))\s+(.*)', line)
             if match:
                 full_ref, book_part, num_part, text = match.group(1), match.group(2), match.group(3), match.group(4)
-                # 將 {*1*} 轉換成上標 HTML 標籤
                 text = re.sub(r'\{\*(\d+)\*\}', rf'<sup class="sup-blue">\1</sup>', text)
-                
-                if "｜" in full_ref:
-                    html_template += f'<div class="footnote"><span class="ref">{full_ref}</span><span class="text">{text}</span></div>\n'
-                else:
-                    html_template += f'<div class="verse"><span class="ref"><span class="ref-book">{book_part} </span>{num_part}</span><span class="text">{text}</span></div>\n'
+                if "｜" in full_ref: html_template += f'<div class="footnote"><span class="ref">{full_ref}</span><span class="text">{text}</span></div>\n'
+                else: html_template += f'<div class="verse"><span class="ref"><span class="ref-book">{book_part} </span>{num_part}</span><span class="text">{text}</span></div>\n'
             else:
                 line = re.sub(r'\{\*(\d+)\*\}', rf'<sup class="sup-blue">\1</sup>', line)
                 html_template += f'<div class="verse">{line}</div>\n'
     html_template += "</body></html>"
     return html_template
 
+# ★ 另開分頁的特殊按鈕元件
+def render_open_new_tab_button(data_bytes, mime_type, button_text, color_theme="default"):
+    b64_data = base64.b64encode(data_bytes).decode('utf-8')
+    bg_color = "rgb(255, 75, 75)" if color_theme == "primary" else "rgb(255, 255, 255)"
+    text_color = "white" if color_theme == "primary" else "rgb(49, 51, 63)"
+    border = "none" if color_theme == "primary" else "1px solid rgba(49, 51, 63, 0.2)"
+    
+    button_html = f"""
+    <!DOCTYPE html><html><head><style>
+        body {{ margin: 0; padding: 0; font-family: "Source Sans Pro", sans-serif; }}
+        .btn {{
+            display: block; width: 100%; text-align: center; padding: 0.5rem 0;
+            border-radius: 0.5rem; font-size: 18px; font-weight: bold; line-height: 1.6;
+            color: {text_color}; background-color: {bg_color}; border: {border}; 
+            text-decoration: none; box-sizing: border-box; cursor: pointer; transition: all 0.2s ease;
+        }}
+        .btn:hover {{ opacity: 0.8; transform: scale(1.02); }}
+        @media (prefers-color-scheme: dark) {{
+            .btn:not([style*="rgb(255, 75, 75)"]) {{ color: rgb(250, 250, 250); background-color: rgb(14, 17, 23); border-color: rgba(250, 250, 250, 0.2); }}
+        }}
+    </style></head><body>
+        <a id="newTabLink" class="btn" target="_blank">{button_text}</a>
+        <script>
+            const str = atob("{b64_data}");
+            const bytes = new Uint8Array(str.length);
+            for (let i = 0; i < str.length; i++) bytes[i] = str.charCodeAt(i);
+            document.getElementById('newTabLink').href = URL.createObjectURL(new Blob([bytes], {{type: "{mime_type}"}}));
+        </script>
+    </body></html>
+    """
+    components.html(button_html, height=55)
 
-# --- 產生 PDF (自動將秘密記號轉為原生上標字體) ---
+# --- 產生 PDF ---
 def generate_pdf(text_content, font_mult, theme):
     if not HAS_REPORTLAB or not FONT_LOADED: return None
     buffer = io.BytesIO()
@@ -420,7 +449,6 @@ def generate_pdf(text_content, font_mult, theme):
                 if book_part: color_str += f'<font color="{c_title}">{book_part}</font> '
                 if num_part: color_str += f'<font color="{c_num}">{num_part}</font>'
                 
-                # 將 {*1*} 轉換成 ReportLab 支援的上標藍字
                 text_part = re.sub(r'\{\*(\d+)\*\}', rf'<super><font color="{c_sup}">\1</font></super>', text_part)
                 
                 p_left = Paragraph(color_str, verse_style)
@@ -444,7 +472,7 @@ def generate_pdf(text_content, font_mult, theme):
         return buffer.getvalue()
     except Exception: return None
 
-# --- 產生圖片 (內建微型排版引擎：自動將記號切分並畫成上標藍字) ---
+# --- 產生圖片 ---
 def generate_image(text_content, font_mult, theme):
     if not HAS_PIL or not os.path.exists(FONT_PATH): return None
     
@@ -455,7 +483,7 @@ def generate_image(text_content, font_mult, theme):
     c_num = (255, 127, 127) if is_dark else (178, 34, 34)
     c_fn = (150, 150, 150) if is_dark else (100, 100, 100)
     c_sep = (100, 100, 100) if is_dark else (200, 200, 200)
-    c_sup = (138, 180, 248) if is_dark else (31, 78, 121) # 上標專用顏色
+    c_sup = (138, 180, 248) if is_dark else (31, 78, 121)
 
     SCALE = 3 
     font_size = int(20 * SCALE * font_mult)
@@ -468,7 +496,7 @@ def generate_image(text_content, font_mult, theme):
     
     try: 
         font = ImageFont.truetype(FONT_PATH, font_size)
-        font_small = ImageFont.truetype(FONT_PATH, int(font_size * 0.7)) # 上標用更小的字體
+        font_small = ImageFont.truetype(FONT_PATH, int(font_size * 0.7)) 
         font_title = ImageFont.truetype(FONT_PATH, int(font_size * 1.3))
     except Exception: return None 
 
@@ -500,10 +528,8 @@ def generate_image(text_content, font_mult, theme):
             try: indent_width = current_font.getlength(actual_prefix)
             except: indent_width = current_font.getsize(actual_prefix)[0]
             
-        # ★ 詞法分析：將經文拆成「一般文字」與「上標記號」
         tokens = []
         while line:
-            # 偵測秘密記號 {*數字*}
             sup_match = re.search(r'^\{\*(\d+)\*\}', line)
             if sup_match:
                 tokens.append(('sup', sup_match.group(1)))
@@ -588,7 +614,6 @@ def generate_image(text_content, font_mult, theme):
                     except: w = current_font.getsize(np + " ")[0]
                     cur_x += w
             
-            # ★ 繪製每一行文字：遇到上標就縮小抬高畫藍色
             for token_type, token_val in text:
                 if token_type == 'sup':
                     draw.text((cur_x, y_text - int(font_size * 0.3)), token_val, font=font_small, fill=c_sup)
@@ -618,8 +643,6 @@ if "user_input" not in st.session_state:
     st.session_state.user_input = st.query_params.get("q", "")
 if "final_text" not in st.session_state:
     st.session_state.final_text = ""
-if "show_web" not in st.session_state:
-    st.session_state.show_web = False 
 
 auto_trigger = False
 if "q" in st.query_params and not st.session_state.get("auto_triggered", False):
@@ -629,7 +652,6 @@ if "q" in st.query_params and not st.session_state.get("auto_triggered", False):
 def clear_text():
     st.session_state.user_input = ""
     st.session_state.final_text = ""
-    st.session_state.show_web = False
     st.query_params.clear()
 
 with st.expander("⚙️ 輸出與排版設定 (深色模式/大小)", expanded=True):
@@ -649,7 +671,6 @@ with col1: btn_start = st.button("🚀 開始抓取", type="primary")
 with col2: st.button("🗑️ 清除內容", on_click=clear_text)
 
 if btn_start or auto_trigger:
-    st.session_state.show_web = False 
     if not user_input.strip():
         st.warning("請輸入內容！")
     else:
@@ -670,7 +691,6 @@ if btn_start or auto_trigger:
         my_bar = st.progress(0)
         results_map = {}
         
-        # 雙軌制：有註解=排隊抓，無註解=極速抓
         if include_footnotes:
             for i, req in enumerate(unique_fetches):
                 results_map[req] = fetch_verse_dict(req[0], req[1], include_footnotes=True)
@@ -721,7 +741,6 @@ if st.session_state.final_text:
     final_text = st.session_state.final_text
     st.success("🎉 抓取完成！")
     
-    # 轉換成乾淨的 Unicode 上標字體顯示給使用者看，並給按鈕複製
     display_text = format_pure_text(final_text)
     render_giant_copy_button(display_text)
     
@@ -740,8 +759,8 @@ if st.session_state.final_text:
         if img_data: st.download_button("📥 下載圖片", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True, type="primary")
         else: st.button("🖼️ 缺圖片套件", disabled=True, use_container_width=True)
     with dl_col2:
-        if st.button("🌐 展開網頁版", use_container_width=True):
-            st.session_state.show_web = not st.session_state.show_web
+        # ★ 完美還原「另開新分頁」網頁版！
+        render_open_new_tab_button(generate_html(final_text, font_mult, theme_val).encode('utf-8'), "text/html", "🌐 網頁版 (另開)", color_theme="default")
     with dl_col3: 
         st.download_button("📝 下載純文字", data=display_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
     with dl_col4:
@@ -750,12 +769,6 @@ if st.session_state.final_text:
             if pdf_data: st.download_button("📄 下載 PDF", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
             else: st.button("📄 PDF (錯誤)", disabled=True, use_container_width=True)
         else: st.button("📄 缺字型", disabled=True, use_container_width=True)
-
-    if st.session_state.show_web:
-        st.markdown("---")
-        st.markdown("### 🌐 網頁版預覽 (可直接在此滑動閱讀)")
-        html_data = generate_html(final_text, font_mult, theme_val)
-        components.html(html_data, height=650, scrolling=True)
 
     st.write("---")
     if img_data:
