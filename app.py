@@ -200,7 +200,7 @@ def parse_input_string(input_str):
     return parsed_items
 
 # =========================================================================
-# ★★★ API 抓取函式 (使用秘密標記，並加入了 -1 的座標偏移校正) ★★★
+# ★★★ API 抓取函式 ★★★
 # =========================================================================
 def fetch_footnotes_db(book_no, chapter):
     url = f"https://www.recoveryversion.com.tw/api/getFootnotes?VERSION=1&chapter_code={book_no}&section_code={chapter}"
@@ -252,32 +252,39 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
                     items = data[key]; break
         if not items: return {"error": "伺服器回傳空資料"}
         
-        verse_dict = {}
+        # ★ 步驟 1：將相同節數（上下半節）的 HTML 先完美拼接
+        html_group = {}
         for item in items:
             v_val = item.get('segment_code') or item.get('unit_code', 0)
             try: v_num = int(v_val)
             except: v_num = 0
+            if v_num > 0:
+                html_content = item.get('content', '')
+                if v_num not in html_group:
+                    html_group[v_num] = html_content
+                else:
+                    html_group[v_num] += html_content 
+
+        verse_dict = {}
+        # ★ 步驟 2：解析拼接後完整的 HTML，並安插註解數字
+        for v_num, full_html in html_group.items():
+            soup = BeautifulSoup(full_html, 'html.parser')
+            pure_text = soup.get_text(separator='', strip=True)
+            paired_footnotes = []
             
-            content_html = item.get('content', '')
-            if v_num > 0 and content_html:
-                soup = BeautifulSoup(content_html, 'html.parser')
-                pure_text = soup.get_text(separator='', strip=True)
-                paired_footnotes = []
-                
-                if include_footnotes and v_num in fn_db:
-                    sorted_fns = sorted(fn_db[v_num], key=lambda x: x['num'])
-                    for fn in sorted_fns:
-                        paired_footnotes.append(f"[註{fn['num']}] {fn['content']}")
+            if include_footnotes and v_num in fn_db:
+                sorted_fns = sorted(fn_db[v_num], key=lambda x: x['num'])
+                for fn in sorted_fns:
+                    paired_footnotes.append(f"[註{fn['num']}] {fn['content']}")
+                    
+                loc_fns = sorted(fn_db[v_num], key=lambda x: x['loc'], reverse=True)
+                for fn in loc_fns:
+                    # 加入 -1 的偏移校正，完美精準對位
+                    idx = max(0, fn['loc'] - 1)
+                    if idx <= len(pure_text): pure_text = pure_text[:idx] + f"{{*{fn['num']}*}}" + pure_text[idx:]
+                    else: pure_text += f"{{*{fn['num']}*}}"
                         
-                    # 逆向安插演算法：將秘密記號 {*數字*} 插回文字中
-                    loc_fns = sorted(fn_db[v_num], key=lambda x: x['loc'], reverse=True)
-                    for fn in loc_fns:
-                        # ★ 加入 -1 的偏移校正，完美精準對位！
-                        idx = max(0, fn['loc'] - 1)
-                        if idx <= len(pure_text): pure_text = pure_text[:idx] + f"{{*{fn['num']}*}}" + pure_text[idx:]
-                        else: pure_text += f"{{*{fn['num']}*}}"
-                            
-                verse_dict[v_num] = {'text': pure_text, 'footnotes': paired_footnotes}
+            verse_dict[v_num] = {'text': pure_text, 'footnotes': paired_footnotes}
         return verse_dict
     except Exception as e: return {"error": f"連線錯誤: {str(e)}"}
 
@@ -643,6 +650,8 @@ if "user_input" not in st.session_state:
     st.session_state.user_input = st.query_params.get("q", "")
 if "final_text" not in st.session_state:
     st.session_state.final_text = ""
+if "show_web" not in st.session_state:
+    st.session_state.show_web = False 
 
 auto_trigger = False
 if "q" in st.query_params and not st.session_state.get("auto_triggered", False):
@@ -652,6 +661,7 @@ if "q" in st.query_params and not st.session_state.get("auto_triggered", False):
 def clear_text():
     st.session_state.user_input = ""
     st.session_state.final_text = ""
+    st.session_state.show_web = False
     st.query_params.clear()
 
 with st.expander("⚙️ 輸出與排版設定 (深色模式/大小)", expanded=True):
@@ -671,6 +681,7 @@ with col1: btn_start = st.button("🚀 開始抓取", type="primary")
 with col2: st.button("🗑️ 清除內容", on_click=clear_text)
 
 if btn_start or auto_trigger:
+    st.session_state.show_web = False 
     if not user_input.strip():
         st.warning("請輸入內容！")
     else:
@@ -691,6 +702,7 @@ if btn_start or auto_trigger:
         my_bar = st.progress(0)
         results_map = {}
         
+        # 雙軌制：有註解=排隊抓，無註解=極速抓
         if include_footnotes:
             for i, req in enumerate(unique_fetches):
                 results_map[req] = fetch_verse_dict(req[0], req[1], include_footnotes=True)
@@ -759,7 +771,6 @@ if st.session_state.final_text:
         if img_data: st.download_button("📥 下載圖片", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True, type="primary")
         else: st.button("🖼️ 缺圖片套件", disabled=True, use_container_width=True)
     with dl_col2:
-        # ★ 完美還原「另開新分頁」網頁版！
         render_open_new_tab_button(generate_html(final_text, font_mult, theme_val).encode('utf-8'), "text/html", "🌐 網頁版 (另開)", color_theme="default")
     with dl_col3: 
         st.download_button("📝 下載純文字", data=display_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
