@@ -200,7 +200,7 @@ def parse_input_string(input_str):
     return parsed_items
 
 # =========================================================================
-# ★★★ API 抓取函式 ★★★
+# ★★★ API 抓取函式 (完美支援「上下半節」拆分獨立對位) ★★★
 # =========================================================================
 def fetch_footnotes_db(book_no, chapter):
     url = f"https://www.recoveryversion.com.tw/api/getFootnotes?VERSION=1&chapter_code={book_no}&section_code={chapter}"
@@ -216,15 +216,18 @@ def fetch_footnotes_db(book_no, chapter):
             fn_dict = {}
             for item in data:
                 v_num = item.get("segment_code", 0)
+                u_num = item.get("unit_code", 0)  # ★ 取出隱藏的上下節識別碼
                 n_num = item.get("note_num", 0)
                 n_loc = item.get("note_loc", 0) 
                 content = item.get("note_content", "")
                 
                 if v_num > 0 and content:
-                    if v_num not in fn_dict: fn_dict[v_num] = []
+                    # 使用 tuple (v_num, u_num) 作為字典的 key，嚴格區分上下節
+                    key = (v_num, int(u_num))
+                    if key not in fn_dict: fn_dict[key] = []
                     content = content.replace('<br>', ' ').replace('<br/>', ' ').replace('ˍ', ' ')
                     content = re.sub(r'<[^>]+>', '', content)
-                    fn_dict[v_num].append({
+                    fn_dict[key].append({
                         'num': n_num,
                         'loc': int(n_loc),
                         'content': content
@@ -237,6 +240,12 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
     query = f"?VERSION=1&output[]=content&output[]=unit_code&output[]=segment_code&chapter_code={book_no}&section_code={chapter}&ORDER=id"
     url = f"https://www.recoveryversion.com.tw/api/getVerses{query}"
     fn_db = fetch_footnotes_db(book_no, chapter) if include_footnotes else {}
+    
+    def get_suffix(idx, total):
+        if total <= 1: return ""
+        if total == 2: return "上" if idx == 0 else "下"
+        if total == 3: return ["上", "中", "下"][idx]
+        return ""
     
     try:
         headers = {
@@ -252,39 +261,55 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
                     items = data[key]; break
         if not items: return {"error": "伺服器回傳空資料"}
         
-        # ★ 步驟 1：將相同節數（上下半節）的 HTML 先完美拼接
-        html_group = {}
+        # 1. 依照節數將文字分類，但保留原始的 unit_code 結構
+        v_group = {}
         for item in items:
             v_val = item.get('segment_code') or item.get('unit_code', 0)
+            u_val = item.get('unit_code', 0)
             try: v_num = int(v_val)
             except: v_num = 0
             if v_num > 0:
+                if v_num not in v_group: v_group[v_num] = {}
+                u_num = int(u_val)
                 html_content = item.get('content', '')
-                if v_num not in html_group:
-                    html_group[v_num] = html_content
+                if u_num not in v_group[v_num]:
+                    v_group[v_num][u_num] = html_content
                 else:
-                    html_group[v_num] += html_content 
+                    v_group[v_num][u_num] += html_content 
 
         verse_dict = {}
-        # ★ 步驟 2：解析拼接後完整的 HTML，並安插註解數字
-        for v_num, full_html in html_group.items():
-            soup = BeautifulSoup(full_html, 'html.parser')
-            pure_text = soup.get_text(separator='', strip=True)
-            paired_footnotes = []
+        # 2. 針對每一節裡面的每一個「上下節」獨立處理
+        for v_num, parts in v_group.items():
+            verse_dict[v_num] = []
+            total_parts = len(parts)
             
-            if include_footnotes and v_num in fn_db:
-                sorted_fns = sorted(fn_db[v_num], key=lambda x: x['num'])
-                for fn in sorted_fns:
-                    paired_footnotes.append(f"[註{fn['num']}] {fn['content']}")
-                    
-                loc_fns = sorted(fn_db[v_num], key=lambda x: x['loc'], reverse=True)
-                for fn in loc_fns:
-                    # 加入 -1 的偏移校正，完美精準對位
-                    idx = max(0, fn['loc'] - 1)
-                    if idx <= len(pure_text): pure_text = pure_text[:idx] + f"{{*{fn['num']}*}}" + pure_text[idx:]
-                    else: pure_text += f"{{*{fn['num']}*}}"
+            # 必須排序確保 上, 中, 下 的順序正確
+            for idx, (u_num, full_html) in enumerate(sorted(parts.items())):
+                soup = BeautifulSoup(full_html, 'html.parser')
+                pure_text = soup.get_text(separator='', strip=True)
+                paired_footnotes = []
+                suffix = get_suffix(idx, total_parts)
+                
+                key = (v_num, u_num)
+                if include_footnotes and key in fn_db:
+                    sorted_fns = sorted(fn_db[key], key=lambda x: x['num'])
+                    for fn in sorted_fns:
+                        paired_footnotes.append(f"[註{fn['num']}] {fn['content']}")
                         
-            verse_dict[v_num] = {'text': pure_text, 'footnotes': paired_footnotes}
+                    # 逆向安插演算法 (限定在該半節內獨立運作)
+                    loc_fns = sorted(fn_db[key], key=lambda x: x['loc'], reverse=True)
+                    for fn in loc_fns:
+                        insert_idx = max(0, fn['loc'] - 1)
+                        if insert_idx <= len(pure_text): 
+                            pure_text = pure_text[:insert_idx] + f"{{*{fn['num']}*}}" + pure_text[insert_idx:]
+                        else: 
+                            pure_text += f"{{*{fn['num']}*}}"
+                            
+                verse_dict[v_num].append({
+                    'suffix': suffix,
+                    'text': pure_text,
+                    'footnotes': paired_footnotes
+                })
         return verse_dict
     except Exception as e: return {"error": f"連線錯誤: {str(e)}"}
 
@@ -314,7 +339,7 @@ def render_giant_copy_button(display_text):
     """
     components.html(html_code, height=75)
 
-# --- 產生 網頁版 HTML (自動將秘密記號轉為上標藍字 CSS) ---
+# --- 產生 網頁版 HTML ---
 def generate_html(text_content, font_mult, theme):
     is_dark = (theme == "dark")
     bg_col = "#1E1E1E" if is_dark else "#ffffff"
@@ -361,7 +386,7 @@ def generate_html(text_content, font_mult, theme):
         elif line == FOOTNOTE_TITLE: html_template += f'<div class="footnote-title">{line}</div>\n'
         elif line in FULL_BIBLE_BOOKS: html_template += f'<div class="book-title">{line}</div>\n'
         else:
-            match = re.match(r'^(([一-龥]*)\s*(\d+:\d+(?:\s*｜\s*\[[^\]]+\])?))\s+(.*)', line)
+            match = re.match(r'^(([一-龥]*)\s*(\d+:\d+(?:[上中下])?(?:\s*｜\s*\[[^\]]+\])?))\s+(.*)', line)
             if match:
                 full_ref, book_part, num_part, text = match.group(1), match.group(2), match.group(3), match.group(4)
                 text = re.sub(r'\{\*(\d+)\*\}', rf'<sup class="sup-blue">\1</sup>', text)
@@ -373,7 +398,6 @@ def generate_html(text_content, font_mult, theme):
     html_template += "</body></html>"
     return html_template
 
-# ★ 另開分頁的特殊按鈕元件
 def render_open_new_tab_button(data_bytes, mime_type, button_text, color_theme="default"):
     b64_data = base64.b64encode(data_bytes).decode('utf-8')
     bg_color = "rgb(255, 75, 75)" if color_theme == "primary" else "rgb(255, 255, 255)"
@@ -425,7 +449,7 @@ def generate_pdf(text_content, font_mult, theme):
     title_style = ParagraphStyle('TitleStyle', fontName='NotoSansTC', fontSize=16*font_mult, leading=24*font_mult, spaceBefore=20, spaceAfter=8, textColor=HexColor(c_title))
     separator_style = ParagraphStyle('SeparatorStyle', fontName='NotoSansTC', fontSize=12*font_mult, alignment=TA_CENTER, textColor=HexColor("#888888" if is_dark else "#CCCCCC"), spaceBefore=15, spaceAfter=15)
     
-    left_col_width = 75 * font_mult
+    left_col_width = 80 * font_mult # 稍微加寬，容納「上/下」
     right_col_width = 495 - left_col_width
 
     story = []
@@ -449,7 +473,7 @@ def generate_pdf(text_content, font_mult, theme):
             else:
                 story.append(Paragraph(line, footnote_style))
         else:
-            match = re.match(r'^(([一-龥]*)\s*(\d+:\d+))\s+(.*)', line)
+            match = re.match(r'^(([一-龥]*)\s*(\d+:\d+(?:[上中下])?))\s+(.*)', line)
             if match:
                 book_part, num_part, text_part = match.group(2).strip(), match.group(3).strip(), match.group(4).strip()
                 color_str = ""
@@ -526,7 +550,8 @@ def generate_image(text_content, font_mult, theme):
         book_part, num_part = "", ""
         indent_width = 0
         
-        match = re.match(r'^(([一-龥]*)\s*(\d+:\d+(?:\s*｜\s*\[[^\]]+\])?))\s+(.*)', line)
+        # 支援上/中/下節的擷取
+        match = re.match(r'^(([一-龥]*)\s*(\d+:\d+(?:[上中下])?(?:\s*｜\s*\[[^\]]+\])?))\s+(.*)', line)
         if match:
             prefix, book_part, num_part, line = match.group(1), match.group(2).strip(), match.group(3).strip(), match.group(4).strip()
             actual_prefix = ""
@@ -650,8 +675,6 @@ if "user_input" not in st.session_state:
     st.session_state.user_input = st.query_params.get("q", "")
 if "final_text" not in st.session_state:
     st.session_state.final_text = ""
-if "show_web" not in st.session_state:
-    st.session_state.show_web = False 
 
 auto_trigger = False
 if "q" in st.query_params and not st.session_state.get("auto_triggered", False):
@@ -661,7 +684,6 @@ if "q" in st.query_params and not st.session_state.get("auto_triggered", False):
 def clear_text():
     st.session_state.user_input = ""
     st.session_state.final_text = ""
-    st.session_state.show_web = False
     st.query_params.clear()
 
 with st.expander("⚙️ 輸出與排版設定 (深色模式/大小)", expanded=True):
@@ -681,7 +703,6 @@ with col1: btn_start = st.button("🚀 開始抓取", type="primary")
 with col2: st.button("🗑️ 清除內容", on_click=clear_text)
 
 if btn_start or auto_trigger:
-    st.session_state.show_web = False 
     if not user_input.strip():
         st.warning("請輸入內容！")
     else:
@@ -689,7 +710,6 @@ if btn_start or auto_trigger:
         st.success("🔗 網址已更新！您可以直接複製瀏覽器上方網址，傳給朋友點開會自動抓取！")
         
         tasks = parse_input_string(user_input)
-        
         unique_fetches = list({(t['no'], current_ch) for t in tasks for current_ch in range(t['ch_start'], t['ch_end'] + 1)})
         unique_fetches.sort(key=lambda x: (x[0], x[1]))
         
@@ -698,25 +718,21 @@ if btn_start or auto_trigger:
             st.stop()
 
         st.info(f"⚡ 正在為您抓取 {len(unique_fetches)} 個章節中，請稍候...")
-        
         my_bar = st.progress(0)
         results_map = {}
         
-        # 雙軌制：有註解=排隊抓，無註解=極速抓
         if include_footnotes:
             for i, req in enumerate(unique_fetches):
                 results_map[req] = fetch_verse_dict(req[0], req[1], include_footnotes=True)
                 time.sleep(0.1) 
-                if len(unique_fetches) > 0:
-                    my_bar.progress((i + 1) / len(unique_fetches))
+                if len(unique_fetches) > 0: my_bar.progress((i + 1) / len(unique_fetches))
         else:
             with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
                 future_to_req = {executor.submit(fetch_verse_dict, req[0], req[1], False): req for req in unique_fetches}
                 for i, future in enumerate(concurrent.futures.as_completed(future_to_req)):
                     req = future_to_req[future]  
                     results_map[req] = future.result() 
-                    if len(unique_fetches) > 0:
-                        my_bar.progress((i + 1) / len(unique_fetches))
+                    if len(unique_fetches) > 0: my_bar.progress((i + 1) / len(unique_fetches))
 
         final_lines, all_footnotes_list, current_book_no = [], [], None
         for t in tasks:
@@ -736,11 +752,16 @@ if btn_start or auto_trigger:
                                 if current_book_no is not None: final_lines.append(SEPARATOR_LINE)
                                 if output_mode.startswith("模式 2"): final_lines.append(BOOK_FULL_MAP.get(t['name'], t['name']))
                                 current_book_no = t['no']
-                            content = verse_dict[v]['text']
-                            prefix = f"{t['name']} {current_ch}:{v}" if output_mode.startswith("模式 1") else f"{current_ch}:{v}"
-                            final_lines.append(f"{prefix} {content}")
-                            if include_footnotes and verse_dict[v]['footnotes']:
-                                for fn_text in verse_dict[v]['footnotes']: all_footnotes_list.append(f"{prefix} ｜ {fn_text}")
+                                
+                            # ★ 將上下半節的資料分別提取出來
+                            for part in verse_dict[v]:
+                                content = part['text']
+                                suffix = part['suffix']
+                                prefix = f"{t['name']} {current_ch}:{v}{suffix}" if output_mode.startswith("模式 1") else f"{current_ch}:{v}{suffix}"
+                                final_lines.append(f"{prefix} {content}")
+                                if include_footnotes and part['footnotes']:
+                                    for fn_text in part['footnotes']: all_footnotes_list.append(f"{prefix} ｜ {fn_text}")
+                                    
                     if not found_any: final_lines.append(f"[{t['name']} {current_ch}:{start_v} 無此節]")
 
         if include_footnotes and all_footnotes_list:
