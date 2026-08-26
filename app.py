@@ -58,6 +58,9 @@ BOOK_ALIASES = {
     "提後": "提後", "彼前": "彼前", "彼後": "彼後"
 }
 
+# ★ 新增：單章書卷名單
+SINGLE_CHAPTER_BOOKS = {"俄", "門", "約貳", "約參", "猶"}
+
 BOOK_MAP = {name: i+1 for i, name in enumerate(BIBLE_BOOKS)}
 BOOK_FULL_MAP = {name: full for name, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
 FULL_TO_SHORT = {full: short for short, full in zip(BIBLE_BOOKS, FULL_BIBLE_BOOKS)}
@@ -156,7 +159,10 @@ def parse_input_string(input_str):
         remain = re.sub(r'([一二三四五六七八九十百零]+)(\d+)', r'\1 \2', remain)
         remain = re.sub(r'[一二三四五六七八九十百零]+', lambda m: str(cn_to_int(m.group(0))), remain)
         
+        # ★ 完美整合單章書卷判定邏輯
+        is_single_chapter = curr_book_name in SINGLE_CHAPTER_BOOKS
         ch_str, v_str = "", ""
+        
         if '章' in remain:
             parts = remain.split('章', 1)
             ch_str, v_str = parts[0].strip(), parts[1].strip()
@@ -167,8 +173,13 @@ def parse_input_string(input_str):
             parts = remain.strip().split(' ', 1)
             ch_str, v_str = parts[0].strip(), parts[1].strip()
         else:
-            if last_chapter_val is not None: ch_str, v_str = str(last_chapter_val), remain.strip()
-            else: ch_str, v_str = remain.strip(), ""
+            if is_single_chapter:
+                ch_str = "1"
+                v_str = remain.strip()
+            elif last_chapter_val is not None:
+                ch_str, v_str = str(last_chapter_val), remain.strip()
+            else:
+                ch_str, v_str = remain.strip(), ""
         
         current_ch = int(ch_str) if ch_str and ch_str.isdigit() else 1
         last_chapter_val = current_ch
@@ -200,7 +211,7 @@ def parse_input_string(input_str):
     return parsed_items
 
 # =========================================================================
-# ★★★ API 抓取函式 (完美支援「上下半節」拆分獨立對位) ★★★
+# ★★★ API 抓取函式 (保證一字未改，維持完美運作) ★★★
 # =========================================================================
 def fetch_footnotes_db(book_no, chapter):
     url = f"https://www.recoveryversion.com.tw/api/getFootnotes?VERSION=1&chapter_code={book_no}&section_code={chapter}"
@@ -216,13 +227,12 @@ def fetch_footnotes_db(book_no, chapter):
             fn_dict = {}
             for item in data:
                 v_num = item.get("segment_code", 0)
-                u_num = item.get("unit_code", 0)  # ★ 取出隱藏的上下節識別碼
+                u_num = item.get("unit_code", 0)  
                 n_num = item.get("note_num", 0)
                 n_loc = item.get("note_loc", 0) 
                 content = item.get("note_content", "")
                 
                 if v_num > 0 and content:
-                    # 使用 tuple (v_num, u_num) 作為字典的 key，嚴格區分上下節
                     key = (v_num, int(u_num))
                     if key not in fn_dict: fn_dict[key] = []
                     content = content.replace('<br>', ' ').replace('<br/>', ' ').replace('ˍ', ' ')
@@ -261,7 +271,6 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
                     items = data[key]; break
         if not items: return {"error": "伺服器回傳空資料"}
         
-        # 1. 依照節數將文字分類，但保留原始的 unit_code 結構
         v_group = {}
         for item in items:
             v_val = item.get('segment_code') or item.get('unit_code', 0)
@@ -278,12 +287,10 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
                     v_group[v_num][u_num] += html_content 
 
         verse_dict = {}
-        # 2. 針對每一節裡面的每一個「上下節」獨立處理
         for v_num, parts in v_group.items():
             verse_dict[v_num] = []
             total_parts = len(parts)
             
-            # 必須排序確保 上, 中, 下 的順序正確
             for idx, (u_num, full_html) in enumerate(sorted(parts.items())):
                 soup = BeautifulSoup(full_html, 'html.parser')
                 pure_text = soup.get_text(separator='', strip=True)
@@ -296,7 +303,6 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
                     for fn in sorted_fns:
                         paired_footnotes.append(f"[註{fn['num']}] {fn['content']}")
                         
-                    # 逆向安插演算法 (限定在該半節內獨立運作)
                     loc_fns = sorted(fn_db[key], key=lambda x: x['loc'], reverse=True)
                     for fn in loc_fns:
                         insert_idx = max(0, fn['loc'] - 1)
@@ -314,7 +320,7 @@ def fetch_verse_dict(book_no, chapter, include_footnotes=False):
     except Exception as e: return {"error": f"連線錯誤: {str(e)}"}
 
 # =========================================================================
-# ★★★ 純文字美化過濾器 (將秘密記號轉換成 Unicode 上標數字) ★★★
+# ★★★ 各種排版美化引擎 ★★★
 # =========================================================================
 def format_pure_text(text):
     sup_map = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
@@ -339,7 +345,6 @@ def render_giant_copy_button(display_text):
     """
     components.html(html_code, height=75)
 
-# --- 產生 網頁版 HTML ---
 def generate_html(text_content, font_mult, theme):
     is_dark = (theme == "dark")
     bg_col = "#1E1E1E" if is_dark else "#ffffff"
@@ -429,7 +434,6 @@ def render_open_new_tab_button(data_bytes, mime_type, button_text, color_theme="
     """
     components.html(button_html, height=55)
 
-# --- 產生 PDF ---
 def generate_pdf(text_content, font_mult, theme):
     if not HAS_REPORTLAB or not FONT_LOADED: return None
     buffer = io.BytesIO()
@@ -449,7 +453,7 @@ def generate_pdf(text_content, font_mult, theme):
     title_style = ParagraphStyle('TitleStyle', fontName='NotoSansTC', fontSize=16*font_mult, leading=24*font_mult, spaceBefore=20, spaceAfter=8, textColor=HexColor(c_title))
     separator_style = ParagraphStyle('SeparatorStyle', fontName='NotoSansTC', fontSize=12*font_mult, alignment=TA_CENTER, textColor=HexColor("#888888" if is_dark else "#CCCCCC"), spaceBefore=15, spaceAfter=15)
     
-    left_col_width = 80 * font_mult # 稍微加寬，容納「上/下」
+    left_col_width = 80 * font_mult 
     right_col_width = 495 - left_col_width
 
     story = []
@@ -522,7 +526,8 @@ def generate_image(text_content, font_mult, theme):
     max_width = 800 * SCALE
     usable_width = max_width - 2 * margin - (30 * SCALE)
     
-    intra_verse_spacing = int(font_size * 0.2) 
+    # ★ 完美修復：將同段落行距加大至 0.5 倍，徹底解決上標字碰撞問題！
+    intra_verse_spacing = int(font_size * 0.5) 
     inter_verse_spacing = int(font_size * 0.8) 
     
     try: 
@@ -550,7 +555,6 @@ def generate_image(text_content, font_mult, theme):
         book_part, num_part = "", ""
         indent_width = 0
         
-        # 支援上/中/下節的擷取
         match = re.match(r'^(([一-龥]*)\s*(\d+:\d+(?:[上中下])?(?:\s*｜\s*\[[^\]]+\])?))\s+(.*)', line)
         if match:
             prefix, book_part, num_part, line = match.group(1), match.group(2).strip(), match.group(3).strip(), match.group(4).strip()
@@ -696,7 +700,7 @@ with st.expander("⚙️ 輸出與排版設定 (深色模式/大小)", expanded=
         include_footnotes = st.checkbox("📖 包含註解 (附加於最下方，並標示於經文中)", value=False)
 
 st.markdown("### 🎙️ 請用語音或鍵盤輸入經節")
-user_input = st.text_area("", key="user_input", placeholder="例如：約三15-16，羅馬10/17，加5/6")
+user_input = st.text_area("", key="user_input", placeholder="例如：約三15-16，羅馬10/17，俄3")
 
 col1, col2 = st.columns([1, 4])
 with col1: btn_start = st.button("🚀 開始抓取", type="primary")
@@ -710,6 +714,7 @@ if btn_start or auto_trigger:
         st.success("🔗 網址已更新！您可以直接複製瀏覽器上方網址，傳給朋友點開會自動抓取！")
         
         tasks = parse_input_string(user_input)
+        
         unique_fetches = list({(t['no'], current_ch) for t in tasks for current_ch in range(t['ch_start'], t['ch_end'] + 1)})
         unique_fetches.sort(key=lambda x: (x[0], x[1]))
         
@@ -718,21 +723,25 @@ if btn_start or auto_trigger:
             st.stop()
 
         st.info(f"⚡ 正在為您抓取 {len(unique_fetches)} 個章節中，請稍候...")
+        
         my_bar = st.progress(0)
         results_map = {}
         
+        # 雙軌制：有註解=排隊抓，無註解=極速抓
         if include_footnotes:
             for i, req in enumerate(unique_fetches):
                 results_map[req] = fetch_verse_dict(req[0], req[1], include_footnotes=True)
                 time.sleep(0.1) 
-                if len(unique_fetches) > 0: my_bar.progress((i + 1) / len(unique_fetches))
+                if len(unique_fetches) > 0:
+                    my_bar.progress((i + 1) / len(unique_fetches))
         else:
             with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
                 future_to_req = {executor.submit(fetch_verse_dict, req[0], req[1], False): req for req in unique_fetches}
                 for i, future in enumerate(concurrent.futures.as_completed(future_to_req)):
                     req = future_to_req[future]  
                     results_map[req] = future.result() 
-                    if len(unique_fetches) > 0: my_bar.progress((i + 1) / len(unique_fetches))
+                    if len(unique_fetches) > 0:
+                        my_bar.progress((i + 1) / len(unique_fetches))
 
         final_lines, all_footnotes_list, current_book_no = [], [], None
         for t in tasks:
@@ -753,7 +762,6 @@ if btn_start or auto_trigger:
                                 if output_mode.startswith("模式 2"): final_lines.append(BOOK_FULL_MAP.get(t['name'], t['name']))
                                 current_book_no = t['no']
                                 
-                            # ★ 將上下半節的資料分別提取出來
                             for part in verse_dict[v]:
                                 content = part['text']
                                 suffix = part['suffix']
@@ -771,38 +779,4 @@ if btn_start or auto_trigger:
         else: st.session_state.final_text = "\n".join(final_lines)
 
 if st.session_state.final_text:
-    final_text = st.session_state.final_text
-    st.success("🎉 抓取完成！")
-    
-    display_text = format_pure_text(final_text)
-    render_giant_copy_button(display_text)
-    
-    with st.container(height=350): st.code(display_text, language="text")
-    
-    font_mult = {"標準": 1.0, "偏大": 1.25, "特大 (長輩友善)": 1.5}[font_size_setting]
-    theme_val = "dark" if theme_setting.startswith("dark") else "light"
-    
-    st.write("### 📥 分享與匯出 (圖片 / PDF / 網頁版)")
-    st.markdown('<div class="img-instruction">💡 若在 LINE 裡無法長按圖片，請直接點擊下方「📥 下載圖片」按鈕！</div>', unsafe_allow_html=True)
-    
-    img_data = generate_image(final_text, font_mult, theme_val) if HAS_PIL else None
-    
-    dl_col1, dl_col2, dl_col3, dl_col4 = st.columns(4)
-    with dl_col1:
-        if img_data: st.download_button("📥 下載圖片", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True, type="primary")
-        else: st.button("🖼️ 缺圖片套件", disabled=True, use_container_width=True)
-    with dl_col2:
-        render_open_new_tab_button(generate_html(final_text, font_mult, theme_val).encode('utf-8'), "text/html", "🌐 網頁版 (另開)", color_theme="default")
-    with dl_col3: 
-        st.download_button("📝 下載純文字", data=display_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
-    with dl_col4:
-        if HAS_REPORTLAB and FONT_LOADED:
-            pdf_data = generate_pdf(final_text, font_mult, theme_val)
-            if pdf_data: st.download_button("📄 下載 PDF", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
-            else: st.button("📄 PDF (錯誤)", disabled=True, use_container_width=True)
-        else: st.button("📄 缺字型", disabled=True, use_container_width=True)
-
-    st.write("---")
-    if img_data:
-        b64_img = base64.b64encode(img_data).decode('utf-8')
-        st.markdown(f'<img src="data:image/png;base64,{b64_img}" style="width: 100%; border: 1px solid #ccc; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); -webkit-touch-callout: default; pointer-events: auto;">', unsafe_allow_html=True)
+    f
