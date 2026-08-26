@@ -779,4 +779,38 @@ if btn_start or auto_trigger:
         else: st.session_state.final_text = "\n".join(final_lines)
 
 if st.session_state.final_text:
-    f
+    final_text = st.session_state.final_text
+    st.success("🎉 抓取完成！")
+    
+    display_text = format_pure_text(final_text)
+    render_giant_copy_button(display_text)
+    
+    with st.container(height=350): st.code(display_text, language="text")
+    
+    font_mult = {"標準": 1.0, "偏大": 1.25, "特大 (長輩友善)": 1.5}[font_size_setting]
+    theme_val = "dark" if theme_setting.startswith("dark") else "light"
+    
+    st.write("### 📥 分享與匯出 (圖片 / PDF / 網頁版)")
+    st.markdown('<div class="img-instruction">💡 若在 LINE 裡無法長按圖片，請直接點擊下方「📥 下載圖片」按鈕！</div>', unsafe_allow_html=True)
+    
+    img_data = generate_image(final_text, font_mult, theme_val) if HAS_PIL else None
+    
+    dl_col1, dl_col2, dl_col3, dl_col4 = st.columns(4)
+    with dl_col1:
+        if img_data: st.download_button("📥 下載圖片", data=img_data, file_name="bible_verses.png", mime="image/png", use_container_width=True, type="primary")
+        else: st.button("🖼️ 缺圖片套件", disabled=True, use_container_width=True)
+    with dl_col2:
+        render_open_new_tab_button(generate_html(final_text, font_mult, theme_val).encode('utf-8'), "text/html", "🌐 網頁版 (另開)", color_theme="default")
+    with dl_col3: 
+        st.download_button("📝 下載純文字", data=display_text, file_name="bible_verses.txt", mime="text/plain", use_container_width=True)
+    with dl_col4:
+        if HAS_REPORTLAB and FONT_LOADED:
+            pdf_data = generate_pdf(final_text, font_mult, theme_val)
+            if pdf_data: st.download_button("📄 下載 PDF", data=pdf_data, file_name="bible_verses.pdf", mime="application/pdf", use_container_width=True)
+            else: st.button("📄 PDF (錯誤)", disabled=True, use_container_width=True)
+        else: st.button("📄 缺字型", disabled=True, use_container_width=True)
+
+    st.write("---")
+    if img_data:
+        b64_img = base64.b64encode(img_data).decode('utf-8')
+        st.markdown(f'<img src="data:image/png;base64,{b64_img}" style="width: 100%; border: 1px solid #ccc; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); -webkit-touch-callout: default; pointer-events: auto;">', unsafe_allow_html=True)
